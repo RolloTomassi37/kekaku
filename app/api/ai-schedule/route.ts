@@ -1,17 +1,14 @@
-type Category = 'work' | 'study' | 'health' | 'life' | 'other';
-
 type TaskInput = {
   id: string;
   title: string;
   duration: number;
   priority: 'high' | 'medium' | 'low';
-  category: Category;
+  category: string;
   note: string;
 };
 
 const datePattern = /^\d{4}-\d{2}-\d{2}$/;
 const timePattern = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
-const categories = new Set<Category>(['work', 'study', 'health', 'life', 'other']);
 
 function cleanTask(value: unknown): TaskInput | null {
   if (!value || typeof value !== 'object') return null;
@@ -23,7 +20,7 @@ function cleanTask(value: unknown): TaskInput | null {
     title: item.title.trim().slice(0, 80),
     duration: Number.isFinite(duration) ? Math.min(480, Math.max(15, duration)) : 60,
     priority: item.priority === 'high' || item.priority === 'low' ? item.priority : 'medium',
-    category: categories.has(item.category as Category) ? item.category as Category : 'other',
+    category: typeof item.category === 'string' && item.category.trim() ? item.category.trim().slice(0, 80) : 'personal',
     note: typeof item.note === 'string' ? item.note.trim().slice(0, 240) : '',
   };
 }
@@ -65,7 +62,7 @@ export async function POST(request: Request) {
         messages: [
           {
             role: 'system',
-            content: `你是专业的中文时间规划助手。用户时区是 ${timezone}，排期范围是 ${rangeStart} 至 ${rangeEnd}。把计划池事项安排进真实日历，并严格避开已有计划。优先安排高优先级；工作和学习优先放在 09:00–18:00；健康和生活可放在 07:00–21:00；同一天避免排得过满；每项必须完整占用其 duration 分钟。只返回 JSON 对象，结构为：{"summary":"排期说明","plans":[{"poolId":"原事项 id","title":"事项标题","date":"YYYY-MM-DD","startTime":"HH:mm","endTime":"HH:mm","category":"work|study|health|life|other","note":"安排理由或完成标准"}]}。每个 poolId 只能出现一次，不能新增不存在的事项，JSON 以外不要输出内容。`,
+            content: `你是专业的中文时间规划助手。用户时区是 ${timezone}，排期范围是 ${rangeStart} 至 ${rangeEnd}。把计划池事项安排进真实日历，并严格避开已有计划。优先安排高优先级；结合事项分类和语义选择合理时段；同一天避免排得过满；每项必须完整占用其 duration 分钟。只返回 JSON 对象，结构为：{"summary":"排期说明","plans":[{"poolId":"原事项 id","title":"事项标题","date":"YYYY-MM-DD","startTime":"HH:mm","endTime":"HH:mm","category":"原事项 category","note":"安排理由或完成标准"}]}。每个 poolId 只能出现一次，不能新增不存在的事项，必须保留原事项 category，JSON 以外不要输出内容。`,
           },
           {
             role: 'user',
@@ -98,7 +95,7 @@ export async function POST(request: Request) {
         date: item.date,
         startTime: item.startTime,
         endTime: item.endTime,
-        category: categories.has(item.category as Category) ? item.category as Category : source.category,
+        category: source.category,
         note: typeof item.note === 'string' ? item.note.trim().slice(0, 240) : source.note,
       };
     }).filter(Boolean) : [];

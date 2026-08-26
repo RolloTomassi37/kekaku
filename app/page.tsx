@@ -16,6 +16,7 @@ import {
   ListTodo,
   LoaderCircle,
   Moon,
+  Settings2,
   SlidersHorizontal,
   Sparkles,
   Sun,
@@ -26,13 +27,17 @@ import {
 import { CSSProperties, DragEvent as ReactDragEvent, FormEvent, useEffect, useMemo, useState } from 'react';
 
 type ViewMode = 'month' | 'week' | 'day';
-type Category = 'work' | 'study' | 'health' | 'life' | 'other';
+type Category = string;
+type CategoryColor = 'violet' | 'sky' | 'emerald' | 'amber' | 'zinc';
 type Section = 'calendar' | 'inbox' | 'completed';
 type Source = 'manual' | 'ai' | 'quick';
 type PoolScope = 'week' | 'month';
 type Priority = 'high' | 'medium' | 'low';
 type Theme = 'light' | 'dark';
 type TimelineSettings = { startHour: number; endHour: number; hourHeight: number };
+type CategoryDefinition = { id: string; label: string; color: CategoryColor };
+type CategoryDisplay = { label: string; card: string; dot: string };
+type CategoryDisplayMap = Record<string, CategoryDisplay>;
 
 type Plan = {
   id: string;
@@ -81,18 +86,28 @@ const POOL_STORAGE_KEY = 'kekaku-plan-pool-v1';
 const THEME_STORAGE_KEY = 'kekaku-theme-v1';
 const CALENDAR_WIDTH_STORAGE_KEY = 'kekaku-calendar-width-v1';
 const CALENDAR_TIMELINE_STORAGE_KEY = 'kekaku-calendar-timeline-v1';
+const CATEGORY_STORAGE_KEY = 'kekaku-categories-v1';
 const DRAG_MIME = 'application/x-kekaku-plan';
 const weekdayNames = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
 const monthWeekdays = ['一', '二', '三', '四', '五', '六', '日'];
 const DEFAULT_TIMELINE: TimelineSettings = { startHour: 6, endHour: 23, hourHeight: 48 };
 
-const categoryMeta: Record<Category, { label: string; card: string; dot: string }> = {
-  work: { label: '工作', card: 'plan-work', dot: 'bg-violet-500' },
-  study: { label: '学习', card: 'plan-study', dot: 'bg-sky-500' },
-  health: { label: '健康', card: 'plan-health', dot: 'bg-emerald-500' },
-  life: { label: '生活', card: 'plan-life', dot: 'bg-amber-500' },
-  other: { label: '其他', card: 'plan-other', dot: 'bg-zinc-500' },
+const categoryColorMeta: Record<CategoryColor, Omit<CategoryDisplay, 'label'>> = {
+  violet: { card: 'plan-work', dot: 'bg-violet-500' },
+  sky: { card: 'plan-study', dot: 'bg-sky-500' },
+  emerald: { card: 'plan-health', dot: 'bg-emerald-500' },
+  amber: { card: 'plan-life', dot: 'bg-amber-500' },
+  zinc: { card: 'plan-other', dot: 'bg-zinc-500' },
 };
+
+const DEFAULT_CATEGORIES: CategoryDefinition[] = [
+  { id: 'personal', label: '个人', color: 'amber' },
+  { id: 'work', label: '工作', color: 'violet' },
+  { id: 'study', label: '学习', color: 'sky' },
+];
+
+const FALLBACK_CATEGORY: CategoryDisplay = { label: '个人', ...categoryColorMeta.amber };
+const categoryColors = Object.keys(categoryColorMeta) as CategoryColor[];
 
 const priorityMeta: Record<Priority, { label: string; className: string }> = {
   high: { label: '高优先', className: 'bg-red-50 text-red-700' },
@@ -112,6 +127,36 @@ function normalizeTimelineSettings(value: Partial<TimelineSettings>): TimelineSe
   const endHour = Number.isFinite(rawEnd) ? Math.max(startHour + 2, Math.min(24, Math.round(rawEnd))) : DEFAULT_TIMELINE.endHour;
   const hourHeight = Number.isFinite(rawHeight) ? Math.max(40, Math.min(72, Math.round(rawHeight / 4) * 4)) : DEFAULT_TIMELINE.hourHeight;
   return { startHour, endHour, hourHeight };
+}
+
+function normalizeCategories(value: unknown): CategoryDefinition[] {
+  if (!Array.isArray(value)) return DEFAULT_CATEGORIES;
+  const seen = new Set<string>();
+  const normalized = value.flatMap((entry) => {
+    if (!entry || typeof entry !== 'object') return [];
+    const item = entry as Record<string, unknown>;
+    const id = typeof item.id === 'string' ? item.id.trim().slice(0, 80) : '';
+    const label = typeof item.label === 'string' ? item.label.trim().slice(0, 12) : '';
+    const color = categoryColors.includes(item.color as CategoryColor) ? item.color as CategoryColor : 'zinc';
+    if (!id || !label || seen.has(id)) return [];
+    seen.add(id);
+    return [{ id, label, color }];
+  }).slice(0, 12);
+  if (!normalized.some((category) => category.id === 'personal')) normalized.unshift(DEFAULT_CATEGORIES[0]);
+  return normalized.length ? normalized : DEFAULT_CATEGORIES;
+}
+
+function buildCategoryDisplayMap(categories: CategoryDefinition[]): CategoryDisplayMap {
+  return Object.fromEntries(categories.map((category) => [category.id, { label: category.label, ...categoryColorMeta[category.color] }]));
+}
+
+function categoryDisplay(map: CategoryDisplayMap, id: string): CategoryDisplay {
+  return map[id] || FALLBACK_CATEGORY;
+}
+
+function migrateCategory(id: unknown, allowed: Set<string>) {
+  if (typeof id === 'string' && allowed.has(id)) return id;
+  return 'personal';
 }
 
 function toISO(date: Date) {
@@ -191,7 +236,7 @@ function createSamplePlans(today: Date): Plan[] {
       date: toISO(monday),
       startTime: '09:30',
       endTime: '10:30',
-      category: 'life',
+      category: 'personal',
       note: '只保留三个最重要的结果。',
       completed: false,
       source: 'manual',
@@ -213,7 +258,7 @@ function createSamplePlans(today: Date): Plan[] {
       date: toISO(addDays(monday, 2)),
       startTime: '16:00',
       endTime: '17:00',
-      category: 'health',
+      category: 'personal',
       note: '',
       completed: false,
       source: 'manual',
@@ -247,8 +292,8 @@ function createSamplePool(): PoolItem[] {
   return [
     { id: 'pool-1', title: '准备产品发布材料', scope: 'week', duration: 180, priority: 'high', category: 'work', note: '整理发布清单、文案和演示素材', scheduled: false },
     { id: 'pool-2', title: '完成季度阅读清单', scope: 'week', duration: 120, priority: 'medium', category: 'study', note: '读完剩余章节并做摘录', scheduled: false },
-    { id: 'pool-3', title: '整理旅行照片', scope: 'month', duration: 90, priority: 'low', category: 'life', note: '筛选、归档并挑选 20 张', scheduled: false },
-    { id: 'pool-4', title: '安排一次长距离慢跑', scope: 'month', duration: 90, priority: 'medium', category: 'health', note: '选择天气合适的周末上午', scheduled: false },
+    { id: 'pool-3', title: '整理旅行照片', scope: 'month', duration: 90, priority: 'low', category: 'personal', note: '筛选、归档并挑选 20 张', scheduled: false },
+    { id: 'pool-4', title: '安排一次长距离慢跑', scope: 'month', duration: 90, priority: 'medium', category: 'personal', note: '选择天气合适的周末上午', scheduled: false },
   ];
 }
 
@@ -288,7 +333,7 @@ function localQuickParse(prompt: string, today: Date): PlanDraft {
     date: toISO(target),
     startTime: `${pad(hour)}:${pad(minute)}`,
     endTime: `${pad(Math.floor(endMinutes / 60))}:${pad(endMinutes % 60)}`,
-    category: 'other',
+    category: 'personal',
     note: '由快捷计划解析',
   };
 }
@@ -337,7 +382,9 @@ export default function Home() {
   const [theme, setTheme] = useState<Theme>('light');
   const [calendarWidth, setCalendarWidth] = useState(100);
   const [timelineSettings, setTimelineSettings] = useState<TimelineSettings>(DEFAULT_TIMELINE);
+  const [categories, setCategories] = useState<CategoryDefinition[]>(DEFAULT_CATEGORIES);
   const [hydrated, setHydrated] = useState(false);
+  const [categoryModalOpen, setCategoryModalOpen] = useState(false);
   const [planModalOpen, setPlanModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState<PlanDraft>(() => emptyDraft(new Date()));
@@ -356,10 +403,16 @@ export default function Home() {
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     try {
+      const savedCategories = localStorage.getItem(CATEGORY_STORAGE_KEY);
+      const nextCategories = savedCategories ? normalizeCategories(JSON.parse(savedCategories)) : DEFAULT_CATEGORIES;
+      const allowedCategoryIds = new Set(nextCategories.map((category) => category.id));
       const saved = localStorage.getItem(STORAGE_KEY);
-      setPlans(saved ? JSON.parse(saved) : createSamplePlans(new Date()));
+      const nextPlans = (saved ? JSON.parse(saved) : createSamplePlans(new Date())) as Plan[];
       const savedPool = localStorage.getItem(POOL_STORAGE_KEY);
-      setPoolItems(savedPool ? JSON.parse(savedPool) : createSamplePool());
+      const nextPool = (savedPool ? JSON.parse(savedPool) : createSamplePool()) as PoolItem[];
+      setCategories(nextCategories);
+      setPlans(nextPlans.map((plan) => ({ ...plan, category: migrateCategory(plan.category, allowedCategoryIds) })));
+      setPoolItems(nextPool.map((item) => ({ ...item, category: migrateCategory(item.category, allowedCategoryIds) })));
     } catch {
       setPlans(createSamplePlans(new Date()));
       setPoolItems(createSamplePool());
@@ -399,6 +452,10 @@ export default function Home() {
   }, [hydrated, poolItems]);
 
   useEffect(() => {
+    if (hydrated) localStorage.setItem(CATEGORY_STORAGE_KEY, JSON.stringify(categories));
+  }, [categories, hydrated]);
+
+  useEffect(() => {
     if (!toast) return;
     const timer = window.setTimeout(() => setToast(''), 2600);
     return () => window.clearTimeout(timer);
@@ -415,6 +472,7 @@ export default function Home() {
     () => poolItems.filter((item) => item.scope === poolScope && !item.scheduled),
     [poolItems, poolScope],
   );
+  const categoryMeta = useMemo(() => buildCategoryDisplayMap(categories), [categories]);
 
   const weekStart = startOfWeek(anchorDate);
   const weekDays = Array.from({ length: 7 }, (_, index) => addDays(weekStart, index));
@@ -423,7 +481,7 @@ export default function Home() {
     const start = minutes(startTime);
     setEditingId(null);
     setDraft({
-      ...emptyDraft(date),
+      ...emptyDraft(date, categories.some((category) => category.id === 'work') ? 'work' : 'personal'),
       startTime,
       endTime: `${pad(Math.min(23, Math.floor((start + 60) / 60)))}:${pad((start + 60) % 60)}`,
     });
@@ -446,7 +504,7 @@ export default function Home() {
 
   const openPoolCreate = () => {
     setPoolEditingId(null);
-    setPoolDraft(emptyPoolDraft(poolScope));
+    setPoolDraft(emptyPoolDraft(poolScope, categories.some((category) => category.id === 'work') ? 'work' : 'personal'));
     setPoolModalOpen(true);
   };
 
@@ -587,6 +645,7 @@ export default function Home() {
           prompt,
           today: toISO(today),
           timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          categories: categories.map(({ id, label }) => ({ id, label })),
         }),
       });
       if (!response.ok) throw new Error('AI service unavailable');
@@ -689,6 +748,20 @@ export default function Home() {
     });
   };
 
+  const saveCategories = (nextCategories: CategoryDefinition[]) => {
+    const normalized = normalizeCategories(nextCategories);
+    const allowed = new Set(normalized.map((category) => category.id));
+    const keepCategory = (category: string) => allowed.has(category) ? category : 'personal';
+    setCategories(normalized);
+    setPlans((current) => current.map((plan) => ({ ...plan, category: keepCategory(plan.category) })));
+    setPoolItems((current) => current.map((item) => ({ ...item, category: keepCategory(item.category) })));
+    setDraft((current) => ({ ...current, category: keepCategory(current.category) }));
+    setPoolDraft((current) => ({ ...current, category: keepCategory(current.category) }));
+    setAiPreview((current) => current ? { ...current, plans: current.plans.map((plan) => ({ ...plan, category: keepCategory(plan.category) })) } : null);
+    setCategoryModalOpen(false);
+    setToast('分类已更新');
+  };
+
   const title = section === 'calendar' ? '我的计划' : section === 'inbox' ? '快捷收集箱' : '已完成';
 
   return (
@@ -696,9 +769,12 @@ export default function Home() {
       <Sidebar
         section={section}
         setSection={setSection}
+        categories={categories}
+        categoryMeta={categoryMeta}
         inboxCount={inboxPlans.length}
         completedCount={completedPlans.length}
         onCreate={() => openCreate()}
+        onManageCategories={() => setCategoryModalOpen(true)}
       />
 
       <section className="min-h-screen md:pl-[224px]">
@@ -710,6 +786,9 @@ export default function Home() {
             </p>
           </div>
           <div className="flex items-center gap-2">
+            <button onClick={() => setCategoryModalOpen(true)} aria-label="管理分类" title="分类管理" className="icon-button shrink-0">
+              <Settings2 className="size-4" />
+            </button>
             <button onClick={toggleTheme} aria-label={theme === 'light' ? '切换到黑色主题' : '切换到浅色主题'} title={theme === 'light' ? '黑色主题' : '浅色主题'} className="icon-button shrink-0">
               {theme === 'light' ? <Moon className="size-4" /> : <Sun className="size-4" />}
             </button>
@@ -749,6 +828,7 @@ export default function Home() {
                   anchorDate={anchorDate}
                   today={today}
                   plans={plans}
+                  categoryMeta={categoryMeta}
                   onCreate={openCreate}
                   onEdit={openEdit}
                   onDrop={dropOnCalendar}
@@ -763,6 +843,7 @@ export default function Home() {
                   days={weekDays}
                   today={today}
                   plans={plans}
+                  categoryMeta={categoryMeta}
                   timeline={timelineSettings}
                   onCreate={openCreate}
                   onEdit={openEdit}
@@ -778,6 +859,7 @@ export default function Home() {
                   day={anchorDate}
                   today={today}
                   plans={plans}
+                  categoryMeta={categoryMeta}
                   timeline={timelineSettings}
                   onCreate={openCreate}
                   onEdit={openEdit}
@@ -792,6 +874,7 @@ export default function Home() {
           ) : (
             <PlanList
               plans={section === 'inbox' ? inboxPlans : completedPlans}
+              categoryMeta={categoryMeta}
               emptyText={section === 'inbox' ? '还没有通过快捷计划添加的事项' : '还没有完成的计划'}
               onEdit={openEdit}
               onToggle={toggleCompleted}
@@ -808,6 +891,7 @@ export default function Home() {
           scope={poolScope}
           setScope={setPoolScope}
           items={visiblePoolItems}
+          categoryMeta={categoryMeta}
           allItems={poolItems}
           loading={poolAiLoading}
           dragging={dragging}
@@ -825,6 +909,7 @@ export default function Home() {
         <PlanModal
           draft={draft}
           setDraft={setDraft}
+          categories={categories}
           editing={Boolean(editingId)}
           completed={editingId ? Boolean(plans.find((plan) => plan.id === editingId)?.completed) : false}
           onSubmit={savePlan}
@@ -838,6 +923,7 @@ export default function Home() {
         <PoolModal
           draft={poolDraft}
           setDraft={setPoolDraft}
+          categories={categories}
           editing={Boolean(poolEditingId)}
           onSubmit={savePoolItem}
           onClose={() => setPoolModalOpen(false)}
@@ -846,7 +932,11 @@ export default function Home() {
       )}
 
       {aiPreview && (
-        <AiPreviewModal preview={aiPreview} onClose={() => setAiPreview(null)} onAdd={addAiPlans} />
+        <AiPreviewModal preview={aiPreview} categoryMeta={categoryMeta} onClose={() => setAiPreview(null)} onAdd={addAiPlans} />
+      )}
+
+      {categoryModalOpen && (
+        <CategoryManagerModal categories={categories} onClose={() => setCategoryModalOpen(false)} onSave={saveCategories} />
       )}
 
       {toast && (
@@ -863,6 +953,7 @@ function PlanPool({
   scope,
   setScope,
   items,
+  categoryMeta,
   allItems,
   loading,
   dragging,
@@ -878,6 +969,7 @@ function PlanPool({
   scope: PoolScope;
   setScope: (scope: PoolScope) => void;
   items: PoolItem[];
+  categoryMeta: CategoryDisplayMap;
   allItems: PoolItem[];
   loading: boolean;
   dragging: DragPayload | null;
@@ -916,7 +1008,7 @@ function PlanPool({
             >
               <div className="flex items-start gap-2">
                 <GripVertical className="mt-0.5 size-3.5 shrink-0 text-[#bbb] group-hover:text-[#777]" />
-                <span className={`mt-1.5 size-2 shrink-0 rounded-full ${categoryMeta[item.category].dot}`} />
+                <span className={`mt-1.5 size-2 shrink-0 rounded-full ${categoryDisplay(categoryMeta, item.category).dot}`} />
                 <div className="min-w-0 flex-1"><p className="text-xs font-medium leading-5">{item.title}</p>{item.note && <p className="mt-1 line-clamp-2 text-[10px] leading-4 text-[#888]">{item.note}</p>}<div className="mt-2 flex flex-wrap items-center gap-1.5"><span className="rounded bg-[#f2f2f2] px-1.5 py-0.5 text-[9px] text-[#666]">{durationLabel(item.duration)}</span><span className={`rounded px-1.5 py-0.5 text-[9px] ${priorityMeta[item.priority].className}`}>{priorityMeta[item.priority].label}</span></div></div>
               </div>
             </article>
@@ -931,33 +1023,39 @@ function PlanPool({
   );
 }
 
-function emptyDraft(date: Date): PlanDraft {
+function emptyDraft(date: Date, category = 'work'): PlanDraft {
   return {
     title: '',
     date: toISO(date),
     startTime: '09:00',
     endTime: '10:00',
-    category: 'work',
+    category,
     note: '',
   };
 }
 
-function emptyPoolDraft(scope: PoolScope): PoolDraft {
-  return { title: '', scope, duration: 60, priority: 'medium', category: 'work', note: '' };
+function emptyPoolDraft(scope: PoolScope, category = 'work'): PoolDraft {
+  return { title: '', scope, duration: 60, priority: 'medium', category, note: '' };
 }
 
 function Sidebar({
   section,
   setSection,
+  categories,
+  categoryMeta,
   inboxCount,
   completedCount,
   onCreate,
+  onManageCategories,
 }: {
   section: Section;
   setSection: (section: Section) => void;
+  categories: CategoryDefinition[];
+  categoryMeta: CategoryDisplayMap;
   inboxCount: number;
   completedCount: number;
   onCreate: () => void;
+  onManageCategories: () => void;
 }) {
   return (
     <aside className="fixed inset-y-0 left-0 z-30 hidden w-[224px] border-r border-[#dedede] bg-[#f6f6f6] p-3 md:flex md:flex-col">
@@ -979,11 +1077,11 @@ function Sidebar({
         <SideNavButton active={section === 'completed'} onClick={() => setSection('completed')} icon={<CheckCircle2 className="size-4" />} label="已完成" count={completedCount} />
       </nav>
 
-      <div className="mt-7 px-3 text-[10px] font-semibold uppercase tracking-[.12em] text-[#999]">分类</div>
+      <div className="mt-7 flex items-center justify-between px-3 text-[10px] font-semibold uppercase tracking-[.12em] text-[#999]"><span>分类</span><button onClick={onManageCategories} aria-label="管理分类" className="rounded p-1 transition hover:bg-[#e9e9e9] hover:text-[#555]"><Settings2 className="size-3" /></button></div>
       <div className="mt-2 space-y-2 px-3">
-        {(Object.keys(categoryMeta) as Category[]).map((category) => (
-          <div key={category} className="flex items-center gap-2 text-xs text-[#666]">
-            <span className={`size-2 rounded-full ${categoryMeta[category].dot}`} /> {categoryMeta[category].label}
+        {categories.map((category) => (
+          <div key={category.id} className="flex items-center gap-2 text-xs text-[#666]">
+            <span className={`size-2 rounded-full ${categoryDisplay(categoryMeta, category.id).dot}`} /> {category.label}
           </div>
         ))}
       </div>
@@ -1149,7 +1247,7 @@ function PlannerToolbar({
   );
 }
 
-function MonthView({ anchorDate, today, plans, onCreate, onEdit, onDrop, onDragStart, onDragEnd, dropTarget, setDropTarget }: { anchorDate: Date; today: Date; plans: Plan[]; onCreate: (date: Date) => void; onEdit: (plan: Plan) => void } & CalendarDragProps) {
+function MonthView({ anchorDate, today, plans, categoryMeta, onCreate, onEdit, onDrop, onDragStart, onDragEnd, dropTarget, setDropTarget }: { anchorDate: Date; today: Date; plans: Plan[]; categoryMeta: CategoryDisplayMap; onCreate: (date: Date) => void; onEdit: (plan: Plan) => void } & CalendarDragProps) {
   const first = new Date(anchorDate.getFullYear(), anchorDate.getMonth(), 1);
   const gridStart = startOfWeek(first);
   const days = Array.from({ length: 42 }, (_, index) => addDays(gridStart, index));
@@ -1177,7 +1275,7 @@ function MonthView({ anchorDate, today, plans, onCreate, onEdit, onDrop, onDragS
               </div>
               <div className="space-y-1">
                 {dayPlans.slice(0, 3).map((plan) => (
-                  <button key={plan.id} draggable onDragStart={(event) => onDragStart(event, { kind: 'plan', id: plan.id })} onDragEnd={onDragEnd} onClick={() => onEdit(plan)} className={`block w-full cursor-grab truncate rounded px-1.5 py-1 text-left text-[10px] font-medium active:cursor-grabbing ${categoryMeta[plan.category].card} ${plan.completed ? 'plan-completed' : ''}`}>
+                  <button key={plan.id} draggable onDragStart={(event) => onDragStart(event, { kind: 'plan', id: plan.id })} onDragEnd={onDragEnd} onClick={() => onEdit(plan)} className={`block w-full cursor-grab truncate rounded px-1.5 py-1 text-left text-[10px] font-medium active:cursor-grabbing ${categoryDisplay(categoryMeta, plan.category).card} ${plan.completed ? 'plan-completed' : ''}`}>
                     <span className="mr-1 opacity-60">{plan.startTime}</span>{plan.title}
                   </button>
                 ))}
@@ -1191,7 +1289,7 @@ function MonthView({ anchorDate, today, plans, onCreate, onEdit, onDrop, onDragS
   );
 }
 
-function WeekView({ days, today, plans, timeline, onCreate, onEdit, onDrop, onDragStart, onDragEnd, dropTarget, setDropTarget }: { days: Date[]; today: Date; plans: Plan[]; timeline: TimelineSettings; onCreate: (date: Date, time?: string) => void; onEdit: (plan: Plan) => void } & CalendarDragProps) {
+function WeekView({ days, today, plans, categoryMeta, timeline, onCreate, onEdit, onDrop, onDragStart, onDragEnd, dropTarget, setDropTarget }: { days: Date[]; today: Date; plans: Plan[]; categoryMeta: CategoryDisplayMap; timeline: TimelineSettings; onCreate: (date: Date, time?: string) => void; onEdit: (plan: Plan) => void } & CalendarDragProps) {
   const timelineHours = Array.from({ length: timeline.endHour - timeline.startHour + 1 }, (_, index) => timeline.startHour + index);
   const timelineHeight = (timeline.endHour - timeline.startHour) * timeline.hourHeight;
   const timelineStyle = { height: timelineHeight, '--hour-height': `${timeline.hourHeight}px` } as CSSProperties;
@@ -1223,7 +1321,7 @@ function WeekView({ days, today, plans, timeline, onCreate, onEdit, onDrop, onDr
               onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; setDropTarget(targetId); }}
               onDrop={(event) => onDrop(event, day, timeFromPointer(event, event.currentTarget, timeline))}
             >
-              {dayPlans.map((plan) => <TimelinePlan key={plan.id} plan={plan} timeline={timeline} onEdit={onEdit} onDragStart={onDragStart} onDragEnd={onDragEnd} />)}
+              {dayPlans.map((plan) => <TimelinePlan key={plan.id} plan={plan} categoryMeta={categoryMeta} timeline={timeline} onEdit={onEdit} onDragStart={onDragStart} onDragEnd={onDragEnd} />)}
             </div>
           );
         })}
@@ -1232,7 +1330,7 @@ function WeekView({ days, today, plans, timeline, onCreate, onEdit, onDrop, onDr
   );
 }
 
-function DayView({ day, today, plans, timeline, onCreate, onEdit, onDrop, onDragStart, onDragEnd, dropTarget, setDropTarget }: { day: Date; today: Date; plans: Plan[]; timeline: TimelineSettings; onCreate: (date: Date, time?: string) => void; onEdit: (plan: Plan) => void } & CalendarDragProps) {
+function DayView({ day, today, plans, categoryMeta, timeline, onCreate, onEdit, onDrop, onDragStart, onDragEnd, dropTarget, setDropTarget }: { day: Date; today: Date; plans: Plan[]; categoryMeta: CategoryDisplayMap; timeline: TimelineSettings; onCreate: (date: Date, time?: string) => void; onEdit: (plan: Plan) => void } & CalendarDragProps) {
   const dayPlans = plans.filter((plan) => plan.date === toISO(day));
   const timelineHours = Array.from({ length: timeline.endHour - timeline.startHour + 1 }, (_, index) => timeline.startHour + index);
   const timelineHeight = (timeline.endHour - timeline.startHour) * timeline.hourHeight;
@@ -1254,7 +1352,7 @@ function DayView({ day, today, plans, timeline, onCreate, onEdit, onDrop, onDrag
             onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; setDropTarget(`day-${toISO(day)}`); }}
             onDrop={(event) => onDrop(event, day, timeFromPointer(event, event.currentTarget, timeline))}
           >
-            {dayPlans.map((plan) => <TimelinePlan key={plan.id} plan={plan} timeline={timeline} onEdit={onEdit} onDragStart={onDragStart} onDragEnd={onDragEnd} wide />)}
+            {dayPlans.map((plan) => <TimelinePlan key={plan.id} plan={plan} categoryMeta={categoryMeta} timeline={timeline} onEdit={onEdit} onDragStart={onDragStart} onDragEnd={onDragEnd} wide />)}
           </div>
         </div>
       </div>
@@ -1264,7 +1362,7 @@ function DayView({ day, today, plans, timeline, onCreate, onEdit, onDrop, onDrag
         <div className="mt-4 space-y-3">
           {dayPlans.sort((a, b) => a.startTime.localeCompare(b.startTime)).map((plan) => (
             <button key={plan.id} onClick={() => onEdit(plan)} className="flex w-full items-start gap-2 text-left">
-              <span className={`mt-1 size-2 rounded-full ${categoryMeta[plan.category].dot}`} />
+              <span className={`mt-1 size-2 rounded-full ${categoryDisplay(categoryMeta, plan.category).dot}`} />
               <span><span className={`block text-xs font-medium ${plan.completed ? 'plan-completed-title' : ''}`}>{plan.title}</span><span className="text-[10px] text-[#777]">{plan.startTime}–{plan.endTime}</span></span>
             </button>
           ))}
@@ -1282,7 +1380,7 @@ function timeFromPointer(event: { clientY: number }, element: HTMLElement, timel
   return `${pad(Math.floor(total / 60))}:${pad(total % 60)}`;
 }
 
-function TimelinePlan({ plan, timeline, onEdit, onDragStart, onDragEnd, wide = false }: { plan: Plan; timeline: TimelineSettings; onEdit: (plan: Plan) => void; onDragStart: (event: ReactDragEvent, payload: DragPayload) => void; onDragEnd: () => void; wide?: boolean }) {
+function TimelinePlan({ plan, categoryMeta, timeline, onEdit, onDragStart, onDragEnd, wide = false }: { plan: Plan; categoryMeta: CategoryDisplayMap; timeline: TimelineSettings; onEdit: (plan: Plan) => void; onDragStart: (event: ReactDragEvent, payload: DragPayload) => void; onDragEnd: () => void; wide?: boolean }) {
   const start = minutes(plan.startTime);
   const end = Math.max(start + 30, minutes(plan.endTime));
   const rangeStart = timeline.startHour * 60;
@@ -1292,14 +1390,14 @@ function TimelinePlan({ plan, timeline, onEdit, onDragStart, onDragEnd, wide = f
   const bottom = ((Math.min(end, rangeEnd) - rangeStart) / 60) * timeline.hourHeight;
   const height = Math.max(24, bottom - top - 3);
   return (
-    <button draggable onDragStart={(event) => onDragStart(event, { kind: 'plan', id: plan.id })} onDragEnd={onDragEnd} onClick={() => onEdit(plan)} className={`absolute left-1.5 right-1.5 z-10 cursor-grab overflow-hidden rounded-md border p-2 text-left shadow-sm transition hover:-translate-y-px hover:shadow-md active:cursor-grabbing ${categoryMeta[plan.category].card} ${plan.completed ? 'plan-completed' : ''} ${wide ? 'max-w-2xl' : ''}`} style={{ top: Math.max(0, top), height }}>
+    <button draggable onDragStart={(event) => onDragStart(event, { kind: 'plan', id: plan.id })} onDragEnd={onDragEnd} onClick={() => onEdit(plan)} className={`absolute left-1.5 right-1.5 z-10 cursor-grab overflow-hidden rounded-md border p-2 text-left shadow-sm transition hover:-translate-y-px hover:shadow-md active:cursor-grabbing ${categoryDisplay(categoryMeta, plan.category).card} ${plan.completed ? 'plan-completed' : ''} ${wide ? 'max-w-2xl' : ''}`} style={{ top: Math.max(0, top), height }}>
       <p className="truncate text-[11px] font-semibold">{plan.title}</p>
       {height > 42 && <p className="mt-1 flex items-center gap-1 text-[9px] opacity-70"><Clock3 className="size-2.5" />{plan.startTime}–{plan.endTime}</p>}
     </button>
   );
 }
 
-function PlanList({ plans, emptyText, onEdit, onToggle }: { plans: Plan[]; emptyText: string; onEdit: (plan: Plan) => void; onToggle: (id: string) => void }) {
+function PlanList({ plans, categoryMeta, emptyText, onEdit, onToggle }: { plans: Plan[]; categoryMeta: CategoryDisplayMap; emptyText: string; onEdit: (plan: Plan) => void; onToggle: (id: string) => void }) {
   const sorted = [...plans].sort((a, b) => `${a.date}${a.startTime}`.localeCompare(`${b.date}${b.startTime}`));
   return (
     <div className="mx-auto max-w-3xl">
@@ -1310,7 +1408,7 @@ function PlanList({ plans, emptyText, onEdit, onToggle }: { plans: Plan[]; empty
             <button onClick={() => onToggle(plan.id)} aria-label={plan.completed ? '恢复为未完成' : '标记为已完成'} className={`grid size-6 shrink-0 place-items-center rounded-full border ${plan.completed ? 'border-black bg-black text-white' : 'border-[#ccc] text-transparent hover:text-[#999]'}`}><Check className="size-3.5" /></button>
             <button onClick={() => onEdit(plan)} className="min-w-0 flex-1 text-left">
               <p className={`truncate text-sm font-medium ${plan.completed ? 'text-[#888] line-through' : ''}`}>{plan.title}</p>
-              <p className="mt-1 text-[11px] text-[#777]">{plan.date} · {plan.startTime}–{plan.endTime} · {categoryMeta[plan.category].label}</p>
+              <p className="mt-1 text-[11px] text-[#777]">{plan.date} · {plan.startTime}–{plan.endTime} · {categoryDisplay(categoryMeta, plan.category).label}</p>
             </button>
             {plan.source !== 'manual' && <span className="rounded-full bg-violet-50 px-2 py-1 text-[10px] text-violet-700">{plan.source === 'ai' ? 'DeepSeek' : '快捷'}</span>}
           </div>
@@ -1321,7 +1419,7 @@ function PlanList({ plans, emptyText, onEdit, onToggle }: { plans: Plan[]; empty
   );
 }
 
-function PlanModal({ draft, setDraft, editing, completed, onSubmit, onClose, onDelete, onToggleCompleted }: { draft: PlanDraft; setDraft: (draft: PlanDraft) => void; editing: boolean; completed: boolean; onSubmit: (event: FormEvent) => void; onClose: () => void; onDelete: () => void; onToggleCompleted: () => void }) {
+function PlanModal({ draft, setDraft, categories, editing, completed, onSubmit, onClose, onDelete, onToggleCompleted }: { draft: PlanDraft; setDraft: (draft: PlanDraft) => void; categories: CategoryDefinition[]; editing: boolean; completed: boolean; onSubmit: (event: FormEvent) => void; onClose: () => void; onDelete: () => void; onToggleCompleted: () => void }) {
   return (
     <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <form onSubmit={onSubmit} className="modal-card max-w-[520px]">
@@ -1330,7 +1428,7 @@ function PlanModal({ draft, setDraft, editing, completed, onSubmit, onClose, onD
           <label className="field-label">计划标题<input autoFocus required value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} className="field-input" placeholder="例如：完成产品方案初稿" /></label>
           <div className="grid grid-cols-2 gap-3">
             <label className="field-label col-span-2 sm:col-span-1">日期<input required type="date" value={draft.date} onChange={(event) => setDraft({ ...draft, date: event.target.value })} className="field-input" /></label>
-            <label className="field-label col-span-2 sm:col-span-1">分类<select value={draft.category} onChange={(event) => setDraft({ ...draft, category: event.target.value as Category })} className="field-input">{(Object.keys(categoryMeta) as Category[]).map((category) => <option key={category} value={category}>{categoryMeta[category].label}</option>)}</select></label>
+            <label className="field-label col-span-2 sm:col-span-1">分类<select value={draft.category} onChange={(event) => setDraft({ ...draft, category: event.target.value })} className="field-input">{categories.map((category) => <option key={category.id} value={category.id}>{category.label}</option>)}</select></label>
             <label className="field-label">开始<input required type="time" value={draft.startTime} onChange={(event) => setDraft({ ...draft, startTime: event.target.value })} className="field-input" /></label>
             <label className="field-label">结束<input required type="time" value={draft.endTime} onChange={(event) => setDraft({ ...draft, endTime: event.target.value })} className="field-input" /></label>
           </div>
@@ -1346,7 +1444,7 @@ function PlanModal({ draft, setDraft, editing, completed, onSubmit, onClose, onD
   );
 }
 
-function PoolModal({ draft, setDraft, editing, onSubmit, onClose, onDelete }: { draft: PoolDraft; setDraft: (draft: PoolDraft) => void; editing: boolean; onSubmit: (event: FormEvent) => void; onClose: () => void; onDelete: () => void }) {
+function PoolModal({ draft, setDraft, categories, editing, onSubmit, onClose, onDelete }: { draft: PoolDraft; setDraft: (draft: PoolDraft) => void; categories: CategoryDefinition[]; editing: boolean; onSubmit: (event: FormEvent) => void; onClose: () => void; onDelete: () => void }) {
   return (
     <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <form onSubmit={onSubmit} className="modal-card max-w-[520px]">
@@ -1357,7 +1455,7 @@ function PoolModal({ draft, setDraft, editing, onSubmit, onClose, onDelete }: { 
             <label className="field-label">计划范围<select value={draft.scope} onChange={(event) => setDraft({ ...draft, scope: event.target.value as PoolScope })} className="field-input"><option value="week">本周</option><option value="month">本月</option></select></label>
             <label className="field-label">预计用时<select value={draft.duration} onChange={(event) => setDraft({ ...draft, duration: Number(event.target.value) })} className="field-input"><option value={30}>30 分钟</option><option value={45}>45 分钟</option><option value={60}>1 小时</option><option value={90}>1.5 小时</option><option value={120}>2 小时</option><option value={180}>3 小时</option><option value={240}>4 小时</option></select></label>
             <label className="field-label">优先级<select value={draft.priority} onChange={(event) => setDraft({ ...draft, priority: event.target.value as Priority })} className="field-input"><option value="high">高优先</option><option value="medium">中优先</option><option value="low">低优先</option></select></label>
-            <label className="field-label">分类<select value={draft.category} onChange={(event) => setDraft({ ...draft, category: event.target.value as Category })} className="field-input">{(Object.keys(categoryMeta) as Category[]).map((category) => <option key={category} value={category}>{categoryMeta[category].label}</option>)}</select></label>
+            <label className="field-label">分类<select value={draft.category} onChange={(event) => setDraft({ ...draft, category: event.target.value })} className="field-input">{categories.map((category) => <option key={category.id} value={category.id}>{category.label}</option>)}</select></label>
           </div>
           <label className="field-label">完成标准 / 备注<textarea value={draft.note} onChange={(event) => setDraft({ ...draft, note: event.target.value })} className="field-input min-h-24 resize-none" placeholder="AI 会参考这里的信息自动排期（可选）" /></label>
         </div>
@@ -1367,7 +1465,54 @@ function PoolModal({ draft, setDraft, editing, onSubmit, onClose, onDelete }: { 
   );
 }
 
-function AiPreviewModal({ preview, onClose, onAdd }: { preview: AiPreview; onClose: () => void; onAdd: () => void }) {
+function CategoryManagerModal({ categories, onClose, onSave }: { categories: CategoryDefinition[]; onClose: () => void; onSave: (categories: CategoryDefinition[]) => void }) {
+  const [draft, setDraft] = useState<CategoryDefinition[]>(categories);
+  const labels = draft.map((category) => category.label.trim());
+  const invalid = labels.some((label) => !label) || new Set(labels).size !== labels.length;
+
+  const updateCategory = (id: string, patch: Partial<CategoryDefinition>) => {
+    setDraft((current) => current.map((category) => category.id === id ? { ...category, ...patch } : category));
+  };
+
+  const addCategory = () => {
+    if (draft.length >= 12) return;
+    const color = categoryColors[draft.length % categoryColors.length];
+    setDraft((current) => [...current, { id: `custom-${newId()}`, label: `新分类 ${current.length + 1}`, color }]);
+  };
+
+  return (
+    <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <section className="modal-card max-w-[560px]">
+        <div className="flex items-center justify-between border-b border-[#e7e7e7] px-5 py-4">
+          <div><h2 className="text-base font-semibold">分类管理</h2><p className="mt-0.5 text-[11px] text-[#777]">编辑名称与颜色，最多保留 12 个分类</p></div>
+          <button onClick={onClose} className="icon-button border-0"><X className="size-4" /></button>
+        </div>
+        <div className="max-h-[58vh] space-y-2 overflow-y-auto p-5">
+          {draft.map((category) => (
+            <div key={category.id} className="flex items-center gap-3 rounded-lg border border-[#e1e1e1] bg-[#fafafa] p-3">
+              <span className={`size-2.5 shrink-0 rounded-full ${categoryColorMeta[category.color].dot}`} />
+              <input value={category.label} maxLength={12} onChange={(event) => updateCategory(category.id, { label: event.target.value })} aria-label="分类名称" className="field-input min-w-0 flex-1 bg-white" />
+              <div className="flex shrink-0 items-center gap-1">
+                {categoryColors.map((color) => (
+                  <button key={color} onClick={() => updateCategory(category.id, { color })} aria-label={`选择${color}颜色`} className={`grid size-6 place-items-center rounded-full transition ${category.color === color ? 'bg-white ring-1 ring-[#aaa]' : 'hover:bg-white'}`}>
+                    <span className={`size-2.5 rounded-full ${categoryColorMeta[color].dot}`} />
+                  </button>
+                ))}
+              </div>
+              {category.id === 'personal' ? <span className="w-8 shrink-0 text-center text-[9px] text-[#999]">基础</span> : <button onClick={() => setDraft((current) => current.filter((item) => item.id !== category.id))} aria-label={`删除${category.label}分类`} className="grid size-8 shrink-0 place-items-center rounded-md text-[#999] transition hover:bg-red-50 hover:text-red-600"><Trash2 className="size-3.5" /></button>}
+            </div>
+          ))}
+          <button onClick={addCategory} disabled={draft.length >= 12} className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-[#c8c8c8] py-3 text-xs font-medium text-[#666] transition hover:border-[#999] hover:bg-[#fafafa] disabled:cursor-not-allowed disabled:opacity-40"><CirclePlus className="size-3.5" />新增分类</button>
+          {invalid && <p className="text-[10px] text-red-600">分类名称不能为空或重复。</p>}
+          <p className="text-[10px] leading-5 text-[#888]">“个人”是基础分类，不能删除。删除其他分类后，相关计划会自动转移到“个人”。</p>
+        </div>
+        <div className="flex justify-end gap-2 border-t border-[#e7e7e7] px-5 py-4"><button onClick={onClose} className="rounded-lg border border-[#d8d8d8] px-4 py-2 text-xs font-medium">取消</button><button disabled={invalid} onClick={() => onSave(draft)} className="rounded-lg bg-black px-4 py-2 text-xs font-medium text-white disabled:cursor-not-allowed disabled:opacity-40">保存分类</button></div>
+      </section>
+    </div>
+  );
+}
+
+function AiPreviewModal({ preview, categoryMeta, onClose, onAdd }: { preview: AiPreview; categoryMeta: CategoryDisplayMap; onClose: () => void; onAdd: () => void }) {
   return (
     <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <section className="modal-card max-w-[620px]">
@@ -1375,7 +1520,7 @@ function AiPreviewModal({ preview, onClose, onAdd }: { preview: AiPreview; onClo
         <div className="max-h-[55vh] space-y-2 overflow-y-auto p-5">
           {preview.plans.map((plan, index) => (
             <div key={`${plan.date}-${plan.title}-${index}`} className="flex items-start gap-3 rounded-lg border border-[#e1e1e1] p-3">
-              <span className={`mt-1 size-2 rounded-full ${categoryMeta[plan.category]?.dot || categoryMeta.other.dot}`} />
+              <span className={`mt-1 size-2 rounded-full ${categoryDisplay(categoryMeta, plan.category).dot}`} />
               <div className="min-w-0 flex-1"><p className="text-sm font-medium">{plan.title}</p>{plan.note && <p className="mt-1 text-[11px] leading-5 text-[#777]">{plan.note}</p>}<p className="mt-2 flex items-center gap-1.5 text-[10px] text-[#666]"><CalendarDays className="size-3" />{plan.date}<Clock3 className="ml-1 size-3" />{plan.startTime}–{plan.endTime}</p></div>
             </div>
           ))}
