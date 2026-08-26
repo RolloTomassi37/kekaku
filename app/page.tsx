@@ -393,47 +393,6 @@ function createSamplePool(): PoolItem[] {
   ];
 }
 
-function localQuickParse(prompt: string, today: Date): PlanDraft {
-  let target = startOfDay(today);
-  if (prompt.includes('后天')) target = addDays(target, 2);
-  else if (prompt.includes('明天')) target = addDays(target, 1);
-  else {
-    const weekMatch = prompt.match(/(?:下)?周([一二三四五六日天])/);
-    if (weekMatch) {
-      const dayIndex = '一二三四五六日天'.indexOf(weekMatch[1]);
-      target = addDays(startOfWeek(today), dayIndex + (prompt.includes('下周') ? 7 : 0));
-      if (target < startOfDay(today) && !prompt.includes('下周')) target = addDays(target, 7);
-    }
-  }
-
-  let hour = prompt.includes('下午') || prompt.includes('晚上') ? 15 : 9;
-  let minute = 0;
-  const timeMatch = prompt.match(/(上午|下午|晚上)?\s*(\d{1,2})(?:[:：点时](\d{1,2})?)?/);
-  if (timeMatch) {
-    hour = Number(timeMatch[2]);
-    minute = Number(timeMatch[3] || 0);
-    if ((timeMatch[1] === '下午' || timeMatch[1] === '晚上') && hour < 12) hour += 12;
-  }
-  hour = Math.min(23, Math.max(0, hour));
-  minute = Math.min(59, Math.max(0, minute));
-  const endMinutes = Math.min(hour * 60 + minute + 60, 23 * 60 + 59);
-
-  const cleanedTitle = prompt
-    .replace(/今天|明天|后天|下?周[一二三四五六日天]/g, '')
-    .replace(/上午|下午|晚上/g, '')
-    .replace(/\d{1,2}(?:[:：点时]\d{0,2})?/g, '')
-    .replace(/^[，,。\s]+|[，,。\s]+$/g, '') || '新计划';
-
-  return {
-    title: cleanedTitle.slice(0, 60),
-    date: toISO(target),
-    startTime: `${pad(hour)}:${pad(minute)}`,
-    endTime: `${pad(Math.floor(endMinutes / 60))}:${pad(endMinutes % 60)}`,
-    category: 'personal',
-    note: '由快捷计划解析',
-  };
-}
-
 function createLocalPoolSchedule(items: PoolItem[], rangeStart: Date, rangeEnd: Date, existing: Plan[]): PlanDraft[] {
   const occupied = existing.map((plan) => ({ date: plan.date, start: minutes(plan.startTime), end: minutes(plan.endTime) }));
   const ordered = [...items].sort((a, b) => ['high', 'medium', 'low'].indexOf(a.priority) - ['high', 'medium', 'low'].indexOf(b.priority));
@@ -734,30 +693,36 @@ export default function Home() {
     if (!prompt || aiLoading) return;
     setAiLoading(true);
     try {
+      const now = new Date();
+      const existing = activePlans
+        .filter((plan) => plan.date >= toISO(today))
+        .slice(0, 100)
+        .map(({ title, date, startTime, endTime }) => ({ title, date, startTime, endTime }));
       const response = await fetch(`${API_BASE}/api/ai-plan`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           prompt,
           today: toISO(today),
+          currentTime: `${toISO(now)} ${pad(now.getHours())}:${pad(now.getMinutes())}`,
           timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
           categories: categories.map(({ id, label }) => ({ id, label })),
+          existingPlans: existing,
         }),
       });
-      if (!response.ok) throw new Error('AI service unavailable');
+      if (!response.ok) {
+        const body = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(body?.error || 'AI 制定暂时不可用，请稍后重试');
+      }
       const result = (await response.json()) as { summary?: string; plans?: PlanDraft[] };
-      if (!result.plans?.length) throw new Error('No plans returned');
+      if (!result.plans?.length) throw new Error('DeepSeek 没有生成可用计划，请换一种描述后重试');
       setAiPreview({
         summary: result.summary || 'DeepSeek 已把你的目标拆成可执行计划。',
         plans: result.plans,
         source: 'ai',
       });
-    } catch {
-      setAiPreview({
-        summary: 'DeepSeek 暂时没有响应，已先用本地快捷解析生成一条计划，你仍可编辑后添加。',
-        plans: [localQuickParse(prompt, today)],
-        source: 'quick',
-      });
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : 'AI 制定暂时不可用，请稍后重试');
     } finally {
       setAiLoading(false);
     }
@@ -943,7 +908,7 @@ export default function Home() {
               <>
               <CalendarLayoutControl width={calendarWidth} timeline={timelineSettings} onWidthChange={updateCalendarWidth} onTimelineChange={updateTimelineSettings} />
               <button onClick={() => setPoolOpen((open) => !open)} aria-pressed={poolOpen} className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-2 text-xs font-medium transition ${poolOpen ? 'border-black bg-black text-white' : 'border-[#dedede] bg-white hover:bg-[#f6f6f6]'}`}>
-                <ListTodo className="size-3.5" /><span className="hidden sm:inline">计划池</span><span className="rounded-full bg-white/15 px-1.5 text-[9px]">{visiblePoolItems.length}</span>
+                <ListTodo className="size-3.5" /><span className="hidden sm:inline">AI / 计划池</span><span className="rounded-full bg-white/15 px-1.5 text-[9px]">{visiblePoolItems.length}</span>
               </button>
               <ViewSwitch value={view} onChange={setView} />
               </>
@@ -952,7 +917,7 @@ export default function Home() {
         </header>
 
         <div
-          className={`${section === 'calendar' ? 'planner-layout-shell' : 'mx-auto max-w-[1500px]'} p-4 md:p-7 ${section === 'calendar' && poolOpen ? 'xl:pr-[356px]' : ''}`}
+          className={`${section === 'calendar' ? 'planner-layout-shell' : 'mx-auto max-w-[1500px]'} p-4 md:p-7 ${section === 'calendar' && poolOpen ? 'xl:pr-[380px]' : ''}`}
           style={section === 'calendar' ? { '--calendar-width': `${calendarWidth}%` } as CSSProperties : undefined}
         >
           {section === 'calendar' ? (
@@ -961,10 +926,6 @@ export default function Home() {
                 view={view}
                 anchorDate={anchorDate}
                 weekStart={weekStart}
-                quickPrompt={quickPrompt}
-                setQuickPrompt={setQuickPrompt}
-                loading={aiLoading}
-                onSubmit={submitQuickPlan}
                 onPrevious={() => shiftDate(-1)}
                 onNext={() => shiftDate(1)}
                 onToday={() => setAnchorDate(startOfDay(new Date()))}
@@ -1049,11 +1010,15 @@ export default function Home() {
           items={visiblePoolItems}
           categoryMeta={categoryMeta}
           allItems={poolItems}
-          loading={poolAiLoading}
+          quickPrompt={quickPrompt}
+          setQuickPrompt={setQuickPrompt}
+          aiPlanLoading={aiLoading}
+          scheduleLoading={poolAiLoading}
           dragging={dragging}
           onClose={() => setPoolOpen(false)}
           onCreate={openPoolCreate}
           onEdit={openPoolEdit}
+          onAiSubmit={submitQuickPlan}
           onAutoSchedule={autoSchedulePool}
           onDragStart={startDragging}
           onDragEnd={finishDragging}
@@ -1111,11 +1076,15 @@ function PlanPool({
   items,
   categoryMeta,
   allItems,
-  loading,
+  quickPrompt,
+  setQuickPrompt,
+  aiPlanLoading,
+  scheduleLoading,
   dragging,
   onClose,
   onCreate,
   onEdit,
+  onAiSubmit,
   onAutoSchedule,
   onDragStart,
   onDragEnd,
@@ -1127,11 +1096,15 @@ function PlanPool({
   items: PoolItem[];
   categoryMeta: CategoryDisplayMap;
   allItems: PoolItem[];
-  loading: boolean;
+  quickPrompt: string;
+  setQuickPrompt: (value: string) => void;
+  aiPlanLoading: boolean;
+  scheduleLoading: boolean;
   dragging: DragPayload | null;
   onClose: () => void;
   onCreate: () => void;
   onEdit: (item: PoolItem) => void;
+  onAiSubmit: (event: FormEvent) => void;
   onAutoSchedule: () => void;
   onDragStart: (event: ReactDragEvent, payload: DragPayload) => void;
   onDragEnd: () => void;
@@ -1142,11 +1115,36 @@ function PlanPool({
   return (
     <>
       {open && <button aria-label="关闭计划池" onClick={onClose} className="fixed inset-0 top-16 z-30 bg-black/20 backdrop-blur-[1px] xl:hidden" />}
-      <aside className={`fixed bottom-0 right-0 top-16 z-40 flex w-[min(336px,92vw)] flex-col border-l border-[#dedede] bg-[#f8f8f8] p-4 shadow-[-12px_0_40px_rgba(0,0,0,.08)] transition-transform duration-200 xl:z-10 xl:shadow-none ${open ? 'translate-x-0' : 'translate-x-full pointer-events-none'}`}>
+      <aside className={`fixed bottom-0 right-0 top-16 z-40 flex w-[min(360px,94vw)] flex-col border-l border-[#dedede] bg-[#f8f8f8] p-4 shadow-[-12px_0_40px_rgba(0,0,0,.08)] transition-transform duration-200 xl:z-10 xl:shadow-none ${open ? 'translate-x-0' : 'translate-x-full pointer-events-none'}`}>
         <div className="flex items-start justify-between">
-          <div><div className="flex items-center gap-2"><h2 className="text-sm font-semibold">计划池</h2><span className="rounded-full bg-[#e9e9e9] px-2 py-0.5 text-[9px] text-[#666]">{items.length} 待安排</span></div><p className="mt-1 text-[11px] text-[#777]">先收集想做的事，再拖到日历安排</p></div>
+          <div><div className="flex items-center gap-2"><h2 className="text-sm font-semibold">计划工作区</h2><span className="rounded-full bg-[#e9e9e9] px-2 py-0.5 text-[9px] text-[#666]">{items.length} 待安排</span></div><p className="mt-1 text-[11px] text-[#777]">用 AI 制定，或从计划池拖动安排</p></div>
           <div className="flex gap-1"><button onClick={onCreate} aria-label="添加计划池事项" className="icon-button size-8"><CirclePlus className="size-3.5" /></button><button onClick={onClose} aria-label="关闭计划池" className="icon-button size-8 xl:hidden"><X className="size-3.5" /></button></div>
         </div>
+
+        <form onSubmit={onAiSubmit} className="mt-4 rounded-xl border border-[#d8d8d8] bg-white p-3 shadow-[0_1px_1px_rgba(0,0,0,.03)] focus-within:border-[#999]">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 text-xs font-semibold"><span className="grid size-7 place-items-center rounded-lg bg-violet-50 text-violet-700"><WandSparkles className="size-3.5" /></span>AI 制定计划</div>
+            <span className="text-[9px] font-medium text-[#999]">DeepSeek</span>
+          </div>
+          <textarea
+            value={quickPrompt}
+            onChange={(event) => setQuickPrompt(event.target.value)}
+            rows={3}
+            maxLength={1000}
+            className="mt-3 w-full resize-none rounded-lg border border-[#e1e1e1] bg-[#fafafa] px-3 py-2.5 text-xs leading-5 outline-none transition placeholder:text-[#aaa] focus:border-[#aaa] focus:bg-white"
+            placeholder="例如：今晚下班后看两集动漫，上 2 小时英语课，再练 1 小时钢琴"
+            aria-label="向 DeepSeek 描述要制定的计划"
+          />
+          <div className="mt-2 flex items-center justify-between gap-3">
+            <p className="text-[9px] leading-4 text-[#999]">会拆成独立任务，并避开已有日程</p>
+            <button disabled={!quickPrompt.trim() || aiPlanLoading} className="flex shrink-0 items-center gap-1.5 rounded-lg bg-black px-3 py-2 text-[11px] font-medium text-white transition hover:bg-[#292929] disabled:cursor-not-allowed disabled:opacity-40">
+              {aiPlanLoading ? <LoaderCircle className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}
+              {aiPlanLoading ? '制定中' : '生成计划'}
+            </button>
+          </div>
+        </form>
+
+        <div className="mt-4 flex items-center justify-between"><p className="text-[11px] font-semibold">计划池</p><p className="text-[9px] text-[#999]">点击 + 添加事项</p></div>
         <div className="mt-4 grid grid-cols-2 rounded-lg border border-[#dedede] bg-[#eee] p-1 text-[11px] font-medium">
           {(['week', 'month'] as PoolScope[]).map((value) => <button key={value} onClick={() => setScope(value)} className={`rounded-md py-1.5 transition ${scope === value ? 'bg-white text-black shadow-sm' : 'text-[#777] hover:text-black'}`}>{value === 'week' ? '本周' : '本月'}</button>)}
         </div>
@@ -1172,7 +1170,7 @@ function PlanPool({
           {!items.length && <div className="grid min-h-40 place-items-center rounded-lg border border-dashed border-[#d4d4d4] p-5 text-center"><div><CheckCircle2 className="mx-auto size-6 text-emerald-500" /><p className="mt-2 text-xs font-medium">都安排好了</p><p className="mt-1 text-[10px] text-[#888]">点击右上角 + 继续添加想做的事</p></div></div>}
         </div>
 
-        <button onClick={onAutoSchedule} disabled={loading || !items.length} className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-black px-3 py-2.5 text-xs font-medium text-white transition hover:bg-[#292929] disabled:cursor-not-allowed disabled:opacity-40">{loading ? <LoaderCircle className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}{loading ? 'DeepSeek 排期中' : 'AI 自动排期'}</button>
+        <button onClick={onAutoSchedule} disabled={scheduleLoading || !items.length} className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-black px-3 py-2.5 text-xs font-medium text-white transition hover:bg-[#292929] disabled:cursor-not-allowed disabled:opacity-40">{scheduleLoading ? <LoaderCircle className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}{scheduleLoading ? 'DeepSeek 排期中' : 'AI 自动排期'}</button>
         <div onDragOver={(event) => { if (dragging?.kind === 'plan') { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; } }} onDrop={onDropBack} className={`mt-3 rounded-lg border border-dashed p-3 text-center text-[10px] leading-5 transition ${dragging?.kind === 'plan' ? 'border-violet-500 bg-violet-50 text-violet-700' : 'border-[#c8c8c8] text-[#888]'}`}>把日历计划拖到这里<br />取消排期并放回计划池</div>
       </aside>
     </>
@@ -1354,10 +1352,6 @@ function PlannerToolbar({
   view,
   anchorDate,
   weekStart,
-  quickPrompt,
-  setQuickPrompt,
-  loading,
-  onSubmit,
   onPrevious,
   onNext,
   onToday,
@@ -1368,10 +1362,6 @@ function PlannerToolbar({
   view: ViewMode;
   anchorDate: Date;
   weekStart: Date;
-  quickPrompt: string;
-  setQuickPrompt: (value: string) => void;
-  loading: boolean;
-  onSubmit: (event: FormEvent) => void;
   onPrevious: () => void;
   onNext: () => void;
   onToday: () => void;
@@ -1386,26 +1376,14 @@ function PlannerToolbar({
       : `${anchorDate.getFullYear()}年 ${formatChineseDate(anchorDate)} · ${weekdayNames[(anchorDate.getDay() + 6) % 7]}`;
 
   return (
-    <div className="mb-5 space-y-3">
-      <div className="flex flex-col justify-between gap-3 lg:flex-row lg:items-center">
+    <div className="mb-5">
+      <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
         <div className="flex items-center gap-2">
           <button onClick={onPrevious} aria-label="上一段时间" className="icon-button"><ChevronLeft className="size-4" /></button>
           <button onClick={onNext} aria-label="下一段时间" className="icon-button"><ChevronRight className="size-4" /></button>
           <button onClick={onToday} className="ml-1 rounded-md border border-[#dedede] px-3 py-2 text-xs font-medium hover:bg-[#f6f6f6]">今天</button>
           <h2 className="ml-1 text-base font-semibold sm:text-lg">{rangeTitle}</h2>
         </div>
-
-        <form onSubmit={onSubmit} className="flex min-w-0 flex-1 items-center gap-2 rounded-xl border border-[#d8d8d8] bg-[#fafafa] p-1.5 transition focus-within:border-[#999] focus-within:bg-white lg:max-w-[520px]">
-          <Sparkles className="ml-2 size-4 shrink-0 text-violet-600" />
-          <input value={quickPrompt} onChange={(event) => setQuickPrompt(event.target.value)} className="min-w-0 flex-1 bg-transparent px-1 text-sm outline-none" placeholder="快捷计划：下周完成发布准备，每天安排 1 小时" aria-label="快捷计划描述" />
-          <button disabled={!quickPrompt.trim() || loading} className="flex shrink-0 items-center gap-1.5 rounded-lg bg-black px-3 py-2 text-xs font-medium text-white transition hover:bg-[#292929] disabled:cursor-not-allowed disabled:opacity-40">
-            {loading ? <LoaderCircle className="size-3.5 animate-spin" /> : <WandSparkles className="size-3.5" />}
-            <span className="hidden sm:inline">{loading ? '思考中' : 'AI 安排'}</span>
-          </button>
-        </form>
-      </div>
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <p className="text-[11px] text-[#888]">支持自然语言输入，DeepSeek 会自动识别日期、时间并拆解复杂目标</p>
         <div data-export-ignore="true" className="flex shrink-0 items-center gap-2">
           <button onClick={onExportJPG} disabled={Boolean(exporting)} className="export-button" title="把当前月、周或日的日历计划内容保存为 JPG">
             {exporting === 'jpg' ? <LoaderCircle className="size-3.5 animate-spin" /> : <ImageDown className="size-3.5" />}
