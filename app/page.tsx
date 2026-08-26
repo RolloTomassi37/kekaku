@@ -855,17 +855,18 @@ export default function Home() {
 
   const exportCurrentICS = () => {
     if (exporting) return;
-    const range = currentViewRange(view, anchorDate);
-    const currentPlans = plans.filter((plan) => plan.date >= toISO(range.start) && plan.date <= toISO(range.end));
-    if (!currentPlans.length) {
-      setToast('当前视图还没有可以导出的计划');
+    if (!plans.length) {
+      setToast('日历里还没有可以导出的计划');
       return;
     }
     setExporting('ics');
     try {
-      const content = buildICalendar(currentPlans, categoryMeta, range.label);
-      downloadFile(new Blob([content], { type: 'text/calendar;charset=utf-8' }), `kekaku-${view}-${toISO(range.start)}-${toISO(range.end)}.ics`);
-      setToast(`已导出 ${currentPlans.length} 条计划，可导入 iOS 日历`);
+      const sortedPlans = [...plans].sort((a, b) => `${a.date}${a.startTime}`.localeCompare(`${b.date}${b.startTime}`));
+      const firstDate = sortedPlans[0].date;
+      const lastDate = sortedPlans[sortedPlans.length - 1].date;
+      const content = buildICalendar(sortedPlans, categoryMeta, '全部计划');
+      downloadFile(new Blob([content], { type: 'text/calendar;charset=utf-8' }), `kekaku-all-${firstDate}-${lastDate}.ics`);
+      setToast(`已导出全部 ${sortedPlans.length} 条日历计划，可导入 iOS 日历`);
     } catch {
       setToast('iOS 日历文件导出失败');
     } finally {
@@ -1390,9 +1391,9 @@ function PlannerToolbar({
             {exporting === 'jpg' ? <LoaderCircle className="size-3.5 animate-spin" /> : <ImageDown className="size-3.5" />}
             {exporting === 'jpg' ? '生成中' : '导出 JPG'}
           </button>
-          <button onClick={onExportICS} disabled={Boolean(exporting)} className="export-button" title="导出当前视图中的计划，可导入 iPhone 日历">
+          <button onClick={onExportICS} disabled={Boolean(exporting)} className="export-button" title="导出全部已排入日历的计划，可导入 iPhone 日历">
             {exporting === 'ics' ? <LoaderCircle className="size-3.5 animate-spin" /> : <CalendarPlus className="size-3.5" />}
-            {exporting === 'ics' ? '生成中' : 'iOS 日历'}
+            {exporting === 'ics' ? '生成中' : '全部 ICS'}
           </button>
         </div>
       </div>
