@@ -3,6 +3,8 @@
 :root {
   --background: #ffffff;
   --foreground: #202020;
+  --font-geist-sans: Inter, "Microsoft YaHei", Arial, sans-serif;
+  --font-geist-mono: "SFMono-Regular", Consolas, monospace;
 }
 
 :root[data-theme='dark'] {

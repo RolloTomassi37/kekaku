@@ -1,0 +1,15 @@
+services:
+  kekaku:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-v4-flash}
+    volumes:
+      - kekaku-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  kekaku-data:

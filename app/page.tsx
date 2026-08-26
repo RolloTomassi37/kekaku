@@ -1,5 +1,3 @@
-'use client';
-
 import {
   Calendar1,
   CalendarDays,
@@ -81,12 +79,14 @@ type CalendarDragProps = {
   setDropTarget: (value: string | null) => void;
 };
 
-const STORAGE_KEY = 'kekaku-plans-v1';
-const POOL_STORAGE_KEY = 'kekaku-plan-pool-v1';
-const THEME_STORAGE_KEY = 'kekaku-theme-v1';
-const CALENDAR_WIDTH_STORAGE_KEY = 'kekaku-calendar-width-v1';
-const CALENDAR_TIMELINE_STORAGE_KEY = 'kekaku-calendar-timeline-v1';
-const CATEGORY_STORAGE_KEY = 'kekaku-categories-v1';
+type PersistedState = {
+  plans: Plan[];
+  poolItems: PoolItem[];
+  categories: CategoryDefinition[];
+  settings: { theme: Theme; calendarWidth: number; timeline: TimelineSettings };
+};
+
+const API_BASE = import.meta.env.VITE_API_BASE_URL || '';
 const DRAG_MIME = 'application/x-kekaku-plan';
 const weekdayNames = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
 const monthWeekdays = ['一', '二', '三', '四', '五', '六', '日'];
@@ -399,61 +399,59 @@ export default function Home() {
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const [toast, setToast] = useState('');
 
-  /* Persisted preferences and demo data are hydrated after the client mounts. */
+  /* Persisted application state is hydrated from the Go API after mount. */
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
-    try {
-      const savedCategories = localStorage.getItem(CATEGORY_STORAGE_KEY);
-      const nextCategories = savedCategories ? normalizeCategories(JSON.parse(savedCategories)) : DEFAULT_CATEGORIES;
-      const allowedCategoryIds = new Set(nextCategories.map((category) => category.id));
-      const saved = localStorage.getItem(STORAGE_KEY);
-      const nextPlans = (saved ? JSON.parse(saved) : createSamplePlans(new Date())) as Plan[];
-      const savedPool = localStorage.getItem(POOL_STORAGE_KEY);
-      const nextPool = (savedPool ? JSON.parse(savedPool) : createSamplePool()) as PoolItem[];
-      setCategories(nextCategories);
-      setPlans(nextPlans.map((plan) => ({ ...plan, category: migrateCategory(plan.category, allowedCategoryIds) })));
-      setPoolItems(nextPool.map((item) => ({ ...item, category: migrateCategory(item.category, allowedCategoryIds) })));
-    } catch {
-      setPlans(createSamplePlans(new Date()));
-      setPoolItems(createSamplePool());
-    }
-    setHydrated(true);
-  }, []);
-
-  useEffect(() => {
-    const saved = localStorage.getItem(THEME_STORAGE_KEY);
-    const next: Theme = saved === 'dark' ? 'dark' : 'light';
-    setTheme(next);
-    document.documentElement.dataset.theme = next;
-    document.documentElement.style.colorScheme = next;
-  }, []);
-
-  useEffect(() => {
-    const saved = Number(localStorage.getItem(CALENDAR_WIDTH_STORAGE_KEY));
-    if (Number.isFinite(saved) && saved >= 70 && saved <= 100) setCalendarWidth(saved);
-  }, []);
-
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem(CALENDAR_TIMELINE_STORAGE_KEY);
-      if (saved) setTimelineSettings(normalizeTimelineSettings(JSON.parse(saved)));
-    } catch {
-      setTimelineSettings(DEFAULT_TIMELINE);
-    }
+    const controller = new AbortController();
+    let cancelled = false;
+    void fetch(`${API_BASE}/api/state`, { signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error('state unavailable');
+        return await response.json() as PersistedState;
+      })
+      .then((state) => {
+        const nextCategories = normalizeCategories(state.categories);
+        const allowedCategoryIds = new Set(nextCategories.map((category) => category.id));
+        const nextTheme: Theme = state.settings?.theme === 'dark' ? 'dark' : 'light';
+        setCategories(nextCategories);
+        setPlans((state.plans || []).map((plan) => ({ ...plan, category: migrateCategory(plan.category, allowedCategoryIds) })));
+        setPoolItems((state.poolItems || []).map((item) => ({ ...item, category: migrateCategory(item.category, allowedCategoryIds) })));
+        setTheme(nextTheme);
+        setCalendarWidth(Math.max(70, Math.min(100, Number(state.settings?.calendarWidth) || 100)));
+        setTimelineSettings(normalizeTimelineSettings(state.settings?.timeline || DEFAULT_TIMELINE));
+        document.documentElement.dataset.theme = nextTheme;
+        document.documentElement.style.colorScheme = nextTheme;
+      })
+      .catch((error) => {
+        if (error instanceof DOMException && error.name === 'AbortError') return;
+        setPlans(createSamplePlans(new Date()));
+        setPoolItems(createSamplePool());
+        setToast('暂时无法连接 Go 服务，当前改动不会保存');
+      })
+      .finally(() => { if (!cancelled) setHydrated(true); });
+    return () => { cancelled = true; controller.abort(); };
   }, []);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   useEffect(() => {
-    if (hydrated) localStorage.setItem(STORAGE_KEY, JSON.stringify(plans));
-  }, [hydrated, plans]);
-
-  useEffect(() => {
-    if (hydrated) localStorage.setItem(POOL_STORAGE_KEY, JSON.stringify(poolItems));
-  }, [hydrated, poolItems]);
-
-  useEffect(() => {
-    if (hydrated) localStorage.setItem(CATEGORY_STORAGE_KEY, JSON.stringify(categories));
-  }, [categories, hydrated]);
+    if (!hydrated) return;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      const state: PersistedState = { plans, poolItems, categories, settings: { theme, calendarWidth, timeline: timelineSettings } };
+      void fetch(`${API_BASE}/api/state`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(state),
+        signal: controller.signal,
+      }).then((response) => {
+        if (!response.ok) throw new Error('save failed');
+      }).catch((error) => {
+        if (error instanceof DOMException && error.name === 'AbortError') return;
+        setToast('保存失败，请检查 Go 服务');
+      });
+    }, 350);
+    return () => { window.clearTimeout(timer); controller.abort(); };
+  }, [calendarWidth, categories, hydrated, plans, poolItems, theme, timelineSettings]);
 
   useEffect(() => {
     if (!toast) return;
@@ -638,7 +636,7 @@ export default function Home() {
     if (!prompt || aiLoading) return;
     setAiLoading(true);
     try {
-      const response = await fetch('/api/ai-plan', {
+      const response = await fetch(`${API_BASE}/api/ai-plan`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -677,7 +675,7 @@ export default function Home() {
     const existing = activePlans.filter((plan) => plan.date >= toISO(rangeStart) && plan.date <= toISO(rangeEnd));
     setPoolAiLoading(true);
     try {
-      const response = await fetch('/api/ai-schedule', {
+      const response = await fetch(`${API_BASE}/api/ai-schedule`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -729,7 +727,6 @@ export default function Home() {
       const next: Theme = current === 'light' ? 'dark' : 'light';
       document.documentElement.dataset.theme = next;
       document.documentElement.style.colorScheme = next;
-      localStorage.setItem(THEME_STORAGE_KEY, next);
       return next;
     });
   };
@@ -737,13 +734,11 @@ export default function Home() {
   const updateCalendarWidth = (value: number) => {
     const next = Math.max(70, Math.min(100, Math.round(value / 5) * 5));
     setCalendarWidth(next);
-    localStorage.setItem(CALENDAR_WIDTH_STORAGE_KEY, String(next));
   };
 
   const updateTimelineSettings = (patch: Partial<TimelineSettings>) => {
     setTimelineSettings((current) => {
       const next = normalizeTimelineSettings({ ...current, ...patch });
-      localStorage.setItem(CALENDAR_TIMELINE_STORAGE_KEY, JSON.stringify(next));
       return next;
     });
   };
