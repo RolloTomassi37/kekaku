@@ -16,13 +16,14 @@ import {
   ListTodo,
   LoaderCircle,
   Moon,
+  SlidersHorizontal,
   Sparkles,
   Sun,
   Trash2,
   WandSparkles,
   X,
 } from 'lucide-react';
-import { DragEvent as ReactDragEvent, FormEvent, useEffect, useMemo, useState } from 'react';
+import { CSSProperties, DragEvent as ReactDragEvent, FormEvent, useEffect, useMemo, useState } from 'react';
 
 type ViewMode = 'month' | 'week' | 'day';
 type Category = 'work' | 'study' | 'health' | 'life' | 'other';
@@ -77,6 +78,7 @@ type CalendarDragProps = {
 const STORAGE_KEY = 'kekaku-plans-v1';
 const POOL_STORAGE_KEY = 'kekaku-plan-pool-v1';
 const THEME_STORAGE_KEY = 'kekaku-theme-v1';
+const CALENDAR_WIDTH_STORAGE_KEY = 'kekaku-calendar-width-v1';
 const DRAG_MIME = 'application/x-kekaku-plan';
 const weekdayNames = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
 const monthWeekdays = ['一', '二', '三', '四', '五', '六', '日'];
@@ -321,6 +323,7 @@ export default function Home() {
   const [poolScope, setPoolScope] = useState<PoolScope>('week');
   const [poolOpen, setPoolOpen] = useState(true);
   const [theme, setTheme] = useState<Theme>('light');
+  const [calendarWidth, setCalendarWidth] = useState(100);
   const [hydrated, setHydrated] = useState(false);
   const [planModalOpen, setPlanModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -336,6 +339,8 @@ export default function Home() {
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const [toast, setToast] = useState('');
 
+  /* Persisted preferences and demo data are hydrated after the client mounts. */
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
@@ -356,6 +361,12 @@ export default function Home() {
     document.documentElement.dataset.theme = next;
     document.documentElement.style.colorScheme = next;
   }, []);
+
+  useEffect(() => {
+    const saved = Number(localStorage.getItem(CALENDAR_WIDTH_STORAGE_KEY));
+    if (Number.isFinite(saved) && saved >= 70 && saved <= 100) setCalendarWidth(saved);
+  }, []);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   useEffect(() => {
     if (hydrated) localStorage.setItem(STORAGE_KEY, JSON.stringify(plans));
@@ -642,6 +653,12 @@ export default function Home() {
     });
   };
 
+  const updateCalendarWidth = (value: number) => {
+    const next = Math.max(70, Math.min(100, Math.round(value / 5) * 5));
+    setCalendarWidth(next);
+    localStorage.setItem(CALENDAR_WIDTH_STORAGE_KEY, String(next));
+  };
+
   const title = section === 'calendar' ? '我的计划' : section === 'inbox' ? '快捷收集箱' : '已完成';
 
   return (
@@ -668,6 +685,7 @@ export default function Home() {
             </button>
             {section === 'calendar' && (
               <>
+              <CalendarWidthControl value={calendarWidth} onChange={updateCalendarWidth} />
               <button onClick={() => setPoolOpen((open) => !open)} aria-pressed={poolOpen} className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-2 text-xs font-medium transition ${poolOpen ? 'border-black bg-black text-white' : 'border-[#dedede] bg-white hover:bg-[#f6f6f6]'}`}>
                 <ListTodo className="size-3.5" /><span className="hidden sm:inline">计划池</span><span className="rounded-full bg-white/15 px-1.5 text-[9px]">{visiblePoolItems.length}</span>
               </button>
@@ -677,7 +695,10 @@ export default function Home() {
           </div>
         </header>
 
-        <div className={`mx-auto max-w-[1500px] p-4 md:p-7 ${section === 'calendar' && poolOpen ? 'xl:pr-[356px]' : ''}`}>
+        <div
+          className={`${section === 'calendar' ? 'planner-layout-shell' : 'mx-auto max-w-[1500px]'} p-4 md:p-7 ${section === 'calendar' && poolOpen ? 'xl:pr-[356px]' : ''}`}
+          style={section === 'calendar' ? { '--calendar-width': `${calendarWidth}%` } as CSSProperties : undefined}
+        >
           {section === 'calendar' ? (
             <>
               <PlannerToolbar
@@ -697,7 +718,7 @@ export default function Home() {
                 <MonthView
                   anchorDate={anchorDate}
                   today={today}
-                  plans={activePlans}
+                  plans={plans}
                   onCreate={openCreate}
                   onEdit={openEdit}
                   onDrop={dropOnCalendar}
@@ -711,7 +732,7 @@ export default function Home() {
                 <WeekView
                   days={weekDays}
                   today={today}
-                  plans={activePlans}
+                  plans={plans}
                   onCreate={openCreate}
                   onEdit={openEdit}
                   onDrop={dropOnCalendar}
@@ -725,7 +746,7 @@ export default function Home() {
                 <DayView
                   day={anchorDate}
                   today={today}
-                  plans={activePlans}
+                  plans={plans}
                   onCreate={openCreate}
                   onEdit={openEdit}
                   onDrop={dropOnCalendar}
@@ -969,6 +990,54 @@ function ViewSwitch({ value, onChange }: { value: ViewMode; onChange: (value: Vi
   );
 }
 
+function CalendarWidthControl({ value, onChange }: { value: number; onChange: (value: number) => void }) {
+  const [open, setOpen] = useState(false);
+  const presets = [
+    { value: 75, label: '紧凑' },
+    { value: 90, label: '舒适' },
+    { value: 100, label: '铺满' },
+  ];
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setOpen((current) => !current)}
+        aria-expanded={open}
+        aria-controls="calendar-width-panel"
+        title="调整日历占用宽度"
+        className="flex h-[34px] items-center gap-1.5 rounded-lg border border-[#dedede] bg-white px-2.5 text-xs font-medium transition hover:bg-[#f6f6f6]"
+      >
+        <SlidersHorizontal className="size-3.5" />
+        <span className="hidden lg:inline">宽度 {value}%</span>
+      </button>
+      {open && (
+        <div id="calendar-width-panel" className="absolute right-0 top-11 z-50 w-64 rounded-xl border border-[#dedede] bg-white p-4 shadow-xl">
+          <div className="flex items-center justify-between">
+            <div><p className="text-xs font-semibold">日历占用宽度</p><p className="mt-1 text-[10px] text-[#777]">仅在大屏生效，并自动记住选择</p></div>
+            <span className="rounded-md bg-[#f2f2f2] px-2 py-1 text-xs font-semibold tabular-nums">{value}%</span>
+          </div>
+          <input
+            type="range"
+            min="70"
+            max="100"
+            step="5"
+            value={value}
+            onChange={(event) => onChange(Number(event.target.value))}
+            aria-label="日历占用宽度百分比"
+            className="calendar-width-range mt-4 w-full"
+          />
+          <div className="mt-3 grid grid-cols-3 gap-1.5">
+            {presets.map((preset) => (
+              <button key={preset.value} onClick={() => onChange(preset.value)} className={`rounded-md border px-2 py-1.5 text-[10px] font-medium transition ${value === preset.value ? 'border-black bg-black text-white' : 'border-[#dedede] hover:bg-[#f6f6f6]'}`}>
+                {preset.label} {preset.value}%
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PlannerToolbar({
   view,
   anchorDate,
@@ -1050,7 +1119,7 @@ function MonthView({ anchorDate, today, plans, onCreate, onEdit, onDrop, onDragS
               </div>
               <div className="space-y-1">
                 {dayPlans.slice(0, 3).map((plan) => (
-                  <button key={plan.id} draggable onDragStart={(event) => onDragStart(event, { kind: 'plan', id: plan.id })} onDragEnd={onDragEnd} onClick={() => onEdit(plan)} className={`block w-full cursor-grab truncate rounded px-1.5 py-1 text-left text-[10px] font-medium active:cursor-grabbing ${categoryMeta[plan.category].card}`}>
+                  <button key={plan.id} draggable onDragStart={(event) => onDragStart(event, { kind: 'plan', id: plan.id })} onDragEnd={onDragEnd} onClick={() => onEdit(plan)} className={`block w-full cursor-grab truncate rounded px-1.5 py-1 text-left text-[10px] font-medium active:cursor-grabbing ${categoryMeta[plan.category].card} ${plan.completed ? 'plan-completed' : ''}`}>
                     <span className="mr-1 opacity-60">{plan.startTime}</span>{plan.title}
                   </button>
                 ))}
@@ -1135,7 +1204,7 @@ function DayView({ day, today, plans, onCreate, onEdit, onDrop, onDragStart, onD
           {dayPlans.sort((a, b) => a.startTime.localeCompare(b.startTime)).map((plan) => (
             <button key={plan.id} onClick={() => onEdit(plan)} className="flex w-full items-start gap-2 text-left">
               <span className={`mt-1 size-2 rounded-full ${categoryMeta[plan.category].dot}`} />
-              <span><span className="block text-xs font-medium">{plan.title}</span><span className="text-[10px] text-[#777]">{plan.startTime}–{plan.endTime}</span></span>
+              <span><span className={`block text-xs font-medium ${plan.completed ? 'plan-completed-title' : ''}`}>{plan.title}</span><span className="text-[10px] text-[#777]">{plan.startTime}–{plan.endTime}</span></span>
             </button>
           ))}
           {!dayPlans.length && <p className="text-xs leading-5 text-[#888]">今天还没有安排。双击时间轴即可快速添加。</p>}
@@ -1163,7 +1232,7 @@ function TimelinePlan({ plan, onEdit, onDragStart, onDragEnd, wide = false }: { 
   const height = Math.max(36, ((end - start) / 60) * 60 - 3);
   if (top < -height || top > 780) return null;
   return (
-    <button draggable onDragStart={(event) => onDragStart(event, { kind: 'plan', id: plan.id })} onDragEnd={onDragEnd} onClick={() => onEdit(plan)} className={`absolute left-1.5 right-1.5 z-10 cursor-grab overflow-hidden rounded-md border p-2 text-left shadow-sm transition hover:-translate-y-px hover:shadow-md active:cursor-grabbing ${categoryMeta[plan.category].card} ${wide ? 'max-w-2xl' : ''}`} style={{ top: Math.max(0, top), height }}>
+    <button draggable onDragStart={(event) => onDragStart(event, { kind: 'plan', id: plan.id })} onDragEnd={onDragEnd} onClick={() => onEdit(plan)} className={`absolute left-1.5 right-1.5 z-10 cursor-grab overflow-hidden rounded-md border p-2 text-left shadow-sm transition hover:-translate-y-px hover:shadow-md active:cursor-grabbing ${categoryMeta[plan.category].card} ${plan.completed ? 'plan-completed' : ''} ${wide ? 'max-w-2xl' : ''}`} style={{ top: Math.max(0, top), height }}>
       <p className="truncate text-[11px] font-semibold">{plan.title}</p>
       {height > 42 && <p className="mt-1 flex items-center gap-1 text-[9px] opacity-70"><Clock3 className="size-2.5" />{plan.startTime}–{plan.endTime}</p>}
     </button>
