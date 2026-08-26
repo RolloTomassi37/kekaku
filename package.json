@@ -14,6 +14,7 @@
     "test": "go -C backend test ./..."
   },
   "dependencies": {
+    "html-to-image": "^1.11.13",
     "lucide-react": "^1.34.0",
     "react": "19.2.6",
     "react-dom": "19.2.6"

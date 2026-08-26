@@ -1,6 +1,7 @@
 import {
   Calendar1,
   CalendarDays,
+  CalendarPlus,
   CalendarRange,
   Check,
   CheckCircle2,
@@ -9,6 +10,7 @@ import {
   CirclePlus,
   Clock3,
   GripVertical,
+  ImageDown,
   Inbox,
   LayoutGrid,
   ListTodo,
@@ -22,7 +24,8 @@ import {
   WandSparkles,
   X,
 } from 'lucide-react';
-import { CSSProperties, DragEvent as ReactDragEvent, FormEvent, useEffect, useMemo, useState } from 'react';
+import { toJpeg } from 'html-to-image';
+import { CSSProperties, DragEvent as ReactDragEvent, FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 
 type ViewMode = 'month' | 'week' | 'day';
 type Category = string;
@@ -32,6 +35,7 @@ type Source = 'manual' | 'ai' | 'quick';
 type PoolScope = 'week' | 'month';
 type Priority = 'high' | 'medium' | 'low';
 type Theme = 'light' | 'dark';
+type ExportKind = 'jpg' | 'ics';
 type TimelineSettings = { startHour: number; endHour: number; hourHeight: number };
 type CategoryDefinition = { id: string; label: string; color: CategoryColor };
 type CategoryDisplay = { label: string; card: string; dot: string };
@@ -93,7 +97,7 @@ const monthWeekdays = ['一', '二', '三', '四', '五', '六', '日'];
 const DEFAULT_TIMELINE: TimelineSettings = { startHour: 6, endHour: 23, hourHeight: 48 };
 
 const categoryColorMeta: Record<CategoryColor, Omit<CategoryDisplay, 'label'>> = {
-  violet: { card: 'plan-work', dot: 'bg-violet-500' },
+  violet: { card: 'plan-work', dot: 'bg-blue-500' },
   sky: { card: 'plan-study', dot: 'bg-sky-500' },
   emerald: { card: 'plan-health', dot: 'bg-emerald-500' },
   amber: { card: 'plan-life', dot: 'bg-amber-500' },
@@ -194,6 +198,98 @@ function isSameDay(a: Date, b: Date) {
 
 function formatChineseDate(date: Date) {
   return `${date.getMonth() + 1}月${date.getDate()}日`;
+}
+
+function currentViewRange(view: ViewMode, anchorDate: Date) {
+  if (view === 'month') {
+    const start = new Date(anchorDate.getFullYear(), anchorDate.getMonth(), 1);
+    const end = new Date(anchorDate.getFullYear(), anchorDate.getMonth() + 1, 0);
+    return { start, end, label: `${anchorDate.getFullYear()}年${anchorDate.getMonth() + 1}月` };
+  }
+  if (view === 'week') {
+    const start = startOfWeek(anchorDate);
+    const end = addDays(start, 6);
+    return { start, end, label: `${formatChineseDate(start)}–${formatChineseDate(end)}` };
+  }
+  const day = startOfDay(anchorDate);
+  return { start: day, end: day, label: `${anchorDate.getFullYear()}年${formatChineseDate(day)}` };
+}
+
+function downloadFile(content: Blob | string, filename: string) {
+  const href = typeof content === 'string' ? content : URL.createObjectURL(content);
+  const anchor = document.createElement('a');
+  anchor.href = href;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  if (content instanceof Blob) window.setTimeout(() => URL.revokeObjectURL(href), 1000);
+}
+
+function escapeICalendarText(value: string) {
+  return value.replace(/\\/g, '\\\\').replace(/\r?\n/g, '\\n').replace(/;/g, '\\;').replace(/,/g, '\\,');
+}
+
+function foldICalendarLine(line: string) {
+  const encoder = new TextEncoder();
+  const lines: string[] = [];
+  let current = '';
+  for (const character of line) {
+    if (current && encoder.encode(current + character).length > 75) {
+      lines.push(current);
+      current = ` ${character}`;
+    } else {
+      current += character;
+    }
+  }
+  lines.push(current);
+  return lines.join('\r\n');
+}
+
+function calendarDate(dateValue: string, timeValue: string) {
+  const [year, month, day] = dateValue.split('-').map(Number);
+  const [hour, minute] = timeValue.split(':').map(Number);
+  return new Date(year, month - 1, day, hour, minute, 0, 0);
+}
+
+function formatICalendarUTC(value: Date) {
+  return value.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+}
+
+function buildICalendar(plans: Plan[], categoryMeta: CategoryDisplayMap, name: string) {
+  const stamp = formatICalendarUTC(new Date());
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Shanghai';
+  const lines = [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//Kekaku//计划日历//ZH-CN',
+    'CALSCALE:GREGORIAN',
+    'METHOD:PUBLISH',
+    `X-WR-CALNAME:${escapeICalendarText(`Kekaku · ${name}`)}`,
+    `X-WR-TIMEZONE:${escapeICalendarText(timezone)}`,
+  ];
+  for (const plan of [...plans].sort((a, b) => `${a.date}${a.startTime}`.localeCompare(`${b.date}${b.startTime}`))) {
+    const start = calendarDate(plan.date, plan.startTime);
+    let end = calendarDate(plan.date, plan.endTime);
+    if (end <= start) end = new Date(start.getTime() + 30 * 60 * 1000);
+    const description = [plan.note, plan.completed ? '状态：已完成' : '状态：待完成'].filter(Boolean).join('\n');
+    const safeID = plan.id.replace(/[^a-zA-Z0-9_.-]/g, '-');
+    lines.push(
+      'BEGIN:VEVENT',
+      `UID:${safeID}@kekaku.local`,
+      `DTSTAMP:${stamp}`,
+      `DTSTART:${formatICalendarUTC(start)}`,
+      `DTEND:${formatICalendarUTC(end)}`,
+      `SUMMARY:${escapeICalendarText(plan.completed ? `【已完成】${plan.title}` : plan.title)}`,
+      `DESCRIPTION:${escapeICalendarText(description)}`,
+      `CATEGORIES:${escapeICalendarText(categoryDisplay(categoryMeta, plan.category).label)}`,
+      'STATUS:CONFIRMED',
+      'TRANSP:OPAQUE',
+      'END:VEVENT',
+    );
+  }
+  lines.push('END:VCALENDAR');
+  return `${lines.map(foldICalendarLine).join('\r\n')}\r\n`;
 }
 
 function minutes(value: string) {
@@ -398,6 +494,8 @@ export default function Home() {
   const [dragging, setDragging] = useState<DragPayload | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const [toast, setToast] = useState('');
+  const [exporting, setExporting] = useState<ExportKind | null>(null);
+  const plannerExportRef = useRef<HTMLDivElement>(null);
 
   /* Persisted application state is hydrated from the Go API after mount. */
   /* eslint-disable react-hooks/set-state-in-effect */
@@ -757,6 +855,55 @@ export default function Home() {
     setToast('分类已更新');
   };
 
+  const exportCurrentJPG = async () => {
+    const node = plannerExportRef.current;
+    if (!node || exporting) return;
+    setExporting('jpg');
+    try {
+      await document.fonts.ready;
+      const calendar = node.querySelector<HTMLElement>('.glass-calendar');
+      const width = Math.ceil(Math.max(node.scrollWidth, calendar?.scrollWidth || 0, node.getBoundingClientRect().width));
+      const height = Math.ceil(Math.max(node.scrollHeight, node.getBoundingClientRect().height));
+      const range = currentViewRange(view, anchorDate);
+      const dataURL = await toJpeg(node, {
+        quality: 0.95,
+        pixelRatio: 2,
+        cacheBust: true,
+        backgroundColor: theme === 'dark' ? '#0b111b' : '#eef8ff',
+        width,
+        height,
+        style: { width: `${width}px`, maxWidth: 'none', overflow: 'visible' },
+        filter: (target) => !(target instanceof HTMLElement && target.dataset.exportIgnore === 'true'),
+      });
+      downloadFile(dataURL, `kekaku-${view}-${toISO(range.start)}-${toISO(range.end)}.jpg`);
+      setToast('当前计划页面已导出为 JPG');
+    } catch {
+      setToast('JPG 导出失败，请稍后重试');
+    } finally {
+      setExporting(null);
+    }
+  };
+
+  const exportCurrentICS = () => {
+    if (exporting) return;
+    const range = currentViewRange(view, anchorDate);
+    const currentPlans = plans.filter((plan) => plan.date >= toISO(range.start) && plan.date <= toISO(range.end));
+    if (!currentPlans.length) {
+      setToast('当前视图还没有可以导出的计划');
+      return;
+    }
+    setExporting('ics');
+    try {
+      const content = buildICalendar(currentPlans, categoryMeta, range.label);
+      downloadFile(new Blob([content], { type: 'text/calendar;charset=utf-8' }), `kekaku-${view}-${toISO(range.start)}-${toISO(range.end)}.ics`);
+      setToast(`已导出 ${currentPlans.length} 条计划，可导入 iOS 日历`);
+    } catch {
+      setToast('iOS 日历文件导出失败');
+    } finally {
+      setExporting(null);
+    }
+  };
+
   const title = section === 'calendar' ? '我的计划' : section === 'inbox' ? '快捷收集箱' : '已完成';
 
   return (
@@ -804,7 +951,7 @@ export default function Home() {
           style={section === 'calendar' ? { '--calendar-width': `${calendarWidth}%` } as CSSProperties : undefined}
         >
           {section === 'calendar' ? (
-            <>
+            <div ref={plannerExportRef} className="planner-export-frame">
               <PlannerToolbar
                 view={view}
                 anchorDate={anchorDate}
@@ -816,6 +963,9 @@ export default function Home() {
                 onPrevious={() => shiftDate(-1)}
                 onNext={() => shiftDate(1)}
                 onToday={() => setAnchorDate(startOfDay(new Date()))}
+                exporting={exporting}
+                onExportJPG={exportCurrentJPG}
+                onExportICS={exportCurrentICS}
               />
 
               {view === 'month' && (
@@ -865,7 +1015,7 @@ export default function Home() {
                   setDropTarget={setDropTarget}
                 />
               )}
-            </>
+            </div>
           ) : (
             <PlanList
               plans={section === 'inbox' ? inboxPlans : completedPlans}
@@ -1012,7 +1162,7 @@ function PlanPool({
         </div>
 
         <button onClick={onAutoSchedule} disabled={loading || !items.length} className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-black px-3 py-2.5 text-xs font-medium text-white transition hover:bg-[#292929] disabled:cursor-not-allowed disabled:opacity-40">{loading ? <LoaderCircle className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}{loading ? 'DeepSeek 排期中' : 'AI 自动排期'}</button>
-        <div onDragOver={(event) => { if (dragging?.kind === 'plan') { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; } }} onDrop={onDropBack} className={`mt-3 rounded-lg border border-dashed p-3 text-center text-[10px] leading-5 transition ${dragging?.kind === 'plan' ? 'border-violet-500 bg-violet-50 text-violet-700' : 'border-[#c8c8c8] text-[#888]'}`}>把日历计划拖到这里<br />取消排期并放回计划池</div>
+        <div onDragOver={(event) => { if (dragging?.kind === 'plan') { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; } }} onDrop={onDropBack} className={`mt-3 rounded-lg border border-dashed p-3 text-center text-[10px] leading-5 transition ${dragging?.kind === 'plan' ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-[#c8c8c8] text-[#888]'}`}>把日历计划拖到这里<br />取消排期并放回计划池</div>
       </aside>
     </>
   );
@@ -1082,7 +1232,7 @@ function Sidebar({
       </div>
 
       <div className="glass-soft mt-auto rounded-lg border border-[#dfdfdf] bg-white p-3">
-        <div className="mb-2 flex items-center gap-2 text-xs font-medium"><Sparkles className="size-3.5 text-violet-600" /> DeepSeek 计划助手</div>
+        <div className="mb-2 flex items-center gap-2 text-xs font-medium"><Sparkles className="size-3.5 text-sky-500" /> DeepSeek 计划助手</div>
         <p className="text-[11px] leading-5 text-[#777]">说出目标，AI 帮你拆成今天能完成的步骤。</p>
         <div className="mt-3 flex items-center gap-2 text-[10px] text-emerald-700"><span className="size-1.5 rounded-full bg-emerald-500" /> 服务端安全连接</div>
       </div>
@@ -1200,6 +1350,9 @@ function PlannerToolbar({
   onPrevious,
   onNext,
   onToday,
+  exporting,
+  onExportJPG,
+  onExportICS,
 }: {
   view: ViewMode;
   anchorDate: Date;
@@ -1211,6 +1364,9 @@ function PlannerToolbar({
   onPrevious: () => void;
   onNext: () => void;
   onToday: () => void;
+  exporting: ExportKind | null;
+  onExportJPG: () => void;
+  onExportICS: () => void;
 }) {
   const rangeTitle = view === 'month'
     ? `${anchorDate.getFullYear()}年 ${anchorDate.getMonth() + 1}月`
@@ -1229,7 +1385,7 @@ function PlannerToolbar({
         </div>
 
         <form onSubmit={onSubmit} className="glass-command flex min-w-0 flex-1 items-center gap-2 rounded-xl border border-[#d8d8d8] bg-[#fafafa] p-1.5 transition focus-within:border-[#999] focus-within:bg-white lg:max-w-[520px]">
-          <Sparkles className="ml-2 size-4 shrink-0 text-violet-600" />
+          <Sparkles className="ml-2 size-4 shrink-0 text-sky-500" />
           <input value={quickPrompt} onChange={(event) => setQuickPrompt(event.target.value)} className="min-w-0 flex-1 bg-transparent px-1 text-sm outline-none" placeholder="快捷计划：下周完成发布准备，每天安排 1 小时" aria-label="快捷计划描述" />
           <button disabled={!quickPrompt.trim() || loading} className="flex shrink-0 items-center gap-1.5 rounded-lg bg-black px-3 py-2 text-xs font-medium text-white transition hover:bg-[#292929] disabled:cursor-not-allowed disabled:opacity-40">
             {loading ? <LoaderCircle className="size-3.5 animate-spin" /> : <WandSparkles className="size-3.5" />}
@@ -1237,7 +1393,19 @@ function PlannerToolbar({
           </button>
         </form>
       </div>
-      <p className="text-[11px] text-[#888] lg:text-right">支持自然语言输入，DeepSeek 会自动识别日期、时间并拆解复杂目标</p>
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <p className="text-[11px] text-[#888]">支持自然语言输入，DeepSeek 会自动识别日期、时间并拆解复杂目标</p>
+        <div data-export-ignore="true" className="flex shrink-0 items-center gap-2">
+          <button onClick={onExportJPG} disabled={Boolean(exporting)} className="export-button" title="把当前月、周或日计划页面保存为 JPG">
+            {exporting === 'jpg' ? <LoaderCircle className="size-3.5 animate-spin" /> : <ImageDown className="size-3.5" />}
+            {exporting === 'jpg' ? '生成中' : '导出 JPG'}
+          </button>
+          <button onClick={onExportICS} disabled={Boolean(exporting)} className="export-button" title="导出当前视图中的计划，可导入 iPhone 日历">
+            {exporting === 'ics' ? <LoaderCircle className="size-3.5 animate-spin" /> : <CalendarPlus className="size-3.5" />}
+            {exporting === 'ics' ? '生成中' : 'iOS 日历'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1262,7 +1430,7 @@ function MonthView({ anchorDate, today, plans, categoryMeta, onCreate, onEdit, o
               onDoubleClick={() => onCreate(day)}
               onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; setDropTarget(targetId); }}
               onDrop={(event) => onDrop(event, day)}
-              className={`group min-h-[132px] border-b border-r border-[#e7e7e7] p-2 last:border-r-0 ${outside ? 'bg-[#fafafa] text-[#aaa]' : 'bg-white'} ${isSameDay(day, today) ? 'bg-violet-50/30' : ''} ${dropTarget === targetId ? 'calendar-drop-active' : ''}`}
+              className={`group min-h-[132px] border-b border-r border-[#e7e7e7] p-2 last:border-r-0 ${outside ? 'bg-[#fafafa] text-[#aaa]' : 'bg-white'} ${isSameDay(day, today) ? 'bg-blue-50/30' : ''} ${dropTarget === targetId ? 'calendar-drop-active' : ''}`}
             >
               <div className="mb-2 flex items-center justify-between">
                 <span className={`grid size-7 place-items-center rounded-full text-xs font-semibold ${isSameDay(day, today) ? 'bg-black text-white' : ''}`}>{day.getDate()}</span>
@@ -1309,7 +1477,7 @@ function WeekView({ days, today, plans, categoryMeta, timeline, onCreate, onEdit
           return (
             <div
               key={toISO(day)}
-              className={`relative border-l border-[#e6e6e6] ${isSameDay(day, today) ? 'bg-violet-50/30' : ''} ${dropTarget === targetId ? 'calendar-drop-active' : ''}`}
+              className={`relative border-l border-[#e6e6e6] ${isSameDay(day, today) ? 'bg-blue-50/30' : ''} ${dropTarget === targetId ? 'calendar-drop-active' : ''}`}
               onDoubleClick={(event) => {
                 onCreate(day, timeFromPointer(event, event.currentTarget, timeline));
               }}
@@ -1405,7 +1573,7 @@ function PlanList({ plans, categoryMeta, emptyText, onEdit, onToggle }: { plans:
               <p className={`truncate text-sm font-medium ${plan.completed ? 'text-[#888] line-through' : ''}`}>{plan.title}</p>
               <p className="mt-1 text-[11px] text-[#777]">{plan.date} · {plan.startTime}–{plan.endTime} · {categoryDisplay(categoryMeta, plan.category).label}</p>
             </button>
-            {plan.source !== 'manual' && <span className="rounded-full bg-violet-50 px-2 py-1 text-[10px] text-violet-700">{plan.source === 'ai' ? 'DeepSeek' : '快捷'}</span>}
+            {plan.source !== 'manual' && <span className="rounded-full bg-blue-50 px-2 py-1 text-[10px] text-blue-700">{plan.source === 'ai' ? 'DeepSeek' : '快捷'}</span>}
           </div>
         ))}
         {!sorted.length && <div className="grid min-h-64 place-items-center p-8 text-center"><div><Inbox className="mx-auto size-8 text-[#bbb]" /><p className="mt-3 text-sm font-medium">这里还是空的</p><p className="mt-1 text-xs text-[#888]">{emptyText}</p></div></div>}
@@ -1511,7 +1679,7 @@ function AiPreviewModal({ preview, categoryMeta, onClose, onAdd }: { preview: Ai
   return (
     <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <section className="modal-card max-w-[620px]">
-        <div className="flex items-start justify-between border-b border-[#e7e7e7] px-5 py-4"><div className="flex gap-3"><div className="grid size-9 shrink-0 place-items-center rounded-lg bg-violet-100 text-violet-700"><Sparkles className="size-4" /></div><div><h2 className="text-base font-semibold">智能安排预览</h2><p className="mt-1 max-w-md text-xs leading-5 text-[#777]">{preview.summary}</p></div></div><button onClick={onClose} className="icon-button border-0"><X className="size-4" /></button></div>
+        <div className="flex items-start justify-between border-b border-[#e7e7e7] px-5 py-4"><div className="flex gap-3"><div className="grid size-9 shrink-0 place-items-center rounded-lg bg-blue-100 text-blue-700"><Sparkles className="size-4" /></div><div><h2 className="text-base font-semibold">智能安排预览</h2><p className="mt-1 max-w-md text-xs leading-5 text-[#777]">{preview.summary}</p></div></div><button onClick={onClose} className="icon-button border-0"><X className="size-4" /></button></div>
         <div className="max-h-[55vh] space-y-2 overflow-y-auto p-5">
           {preview.plans.map((plan, index) => (
             <div key={`${plan.date}-${plan.title}-${index}`} className="flex items-start gap-3 rounded-lg border border-[#e1e1e1] p-3">

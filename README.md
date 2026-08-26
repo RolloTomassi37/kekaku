@@ -9,14 +9,16 @@ Kekaku 是一个以真实时间为中心的个人计划应用。前端使用 Rea
 - 本周 / 本月计划池，支持拖入日历和拖回计划池
 - DeepSeek 自然语言计划拆解与计划池自动排期
 - 完成计划保留在日历并显示删除线
+- 当前月 / 周 / 日计划页面可导出为高清 JPG
+- 当前视图计划可导出为兼容 iOS 日历导入的 ICS 文件
 - 自定义分类名称和颜色
-- 黑色主题、日历宽度、显示时段与每小时高度设置
+- 蓝白玻璃主题、黑色玻璃主题、日历宽度、显示时段与每小时高度设置
 - Go 服务端使用本地 SQLite 持久化，计划、计划池、分类和设置分别存表
 - Go 服务端代理 DeepSeek API，浏览器端不接触 API Key
 
 ## 技术栈
 
-- Web：React 19、TypeScript、Vite、Tailwind CSS、Lucide React
+- Web：React 19、TypeScript、Vite、Tailwind CSS、Lucide React、html-to-image
 - API：Go 1.23、标准库 `net/http`
 - 数据：SQLite（纯 Go 驱动），事务写入、外键约束、WAL 模式
 - 部署：单个 Go 进程同时提供 API 和前端静态文件；包含 Dockerfile 与 Compose 配置
