@@ -383,3 +383,419 @@ html[data-theme='dark'] ::selection {
     transition-duration: .01ms !important;
   }
 }
+
+/* Glass visual system — inspired by HeroUI Pro's documented Glass theme principles. */
+:root {
+  --accent: #7657f6;
+  --accent-strong: #6246e5;
+  --accent-soft: rgb(118 87 246 / 13%);
+  --glass-blur: 22px;
+  --glass-surface: rgb(255 255 255 / 62%);
+  --glass-surface-strong: rgb(255 255 255 / 78%);
+  --glass-surface-soft: rgb(255 255 255 / 42%);
+  --glass-border: rgb(255 255 255 / 76%);
+  --glass-line: rgb(88 80 126 / 13%);
+  --glass-shadow: 0 18px 55px rgb(67 55 116 / 11%), 0 2px 8px rgb(67 55 116 / 6%);
+  --glass-shadow-raised: 0 24px 70px rgb(67 55 116 / 17%), 0 4px 14px rgb(67 55 116 / 8%);
+  --glass-text-muted: #6f6b7b;
+}
+
+:root[data-theme='dark'] {
+  --accent: #a78bfa;
+  --accent-strong: #8b5cf6;
+  --accent-soft: rgb(167 139 250 / 14%);
+  --glass-surface: rgb(20 20 31 / 66%);
+  --glass-surface-strong: rgb(28 27 42 / 82%);
+  --glass-surface-soft: rgb(28 27 42 / 49%);
+  --glass-border: rgb(255 255 255 / 11%);
+  --glass-line: rgb(255 255 255 / 9%);
+  --glass-shadow: 0 20px 60px rgb(0 0 0 / 34%), 0 2px 10px rgb(0 0 0 / 24%);
+  --glass-shadow-raised: 0 28px 85px rgb(0 0 0 / 50%), 0 5px 16px rgb(0 0 0 / 30%);
+  --glass-text-muted: #a6a2b3;
+}
+
+body {
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 15% 12%, rgb(196 181 253 / 55%), transparent 32rem),
+    radial-gradient(circle at 88% 14%, rgb(125 211 252 / 38%), transparent 34rem),
+    radial-gradient(circle at 76% 86%, rgb(253 186 116 / 23%), transparent 30rem),
+    linear-gradient(145deg, #f8f7fc 0%, #eef2fb 48%, #f7f8fc 100%);
+  background-attachment: fixed;
+}
+
+html[data-theme='dark'] body {
+  background:
+    radial-gradient(circle at 12% 8%, rgb(109 40 217 / 24%), transparent 34rem),
+    radial-gradient(circle at 88% 16%, rgb(14 116 144 / 19%), transparent 36rem),
+    radial-gradient(circle at 70% 94%, rgb(124 45 18 / 12%), transparent 32rem),
+    linear-gradient(145deg, #0b0b11 0%, #11111b 48%, #0d0e15 100%) !important;
+}
+
+.app-shell {
+  position: relative;
+  isolation: isolate;
+  background: transparent !important;
+}
+
+.app-shell::before {
+  position: fixed;
+  z-index: -1;
+  inset: 0;
+  content: '';
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgb(255 255 255 / 5%) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(255 255 255 / 5%) 1px, transparent 1px);
+  background-size: 32px 32px;
+  mask-image: linear-gradient(to bottom, black, transparent 72%);
+  opacity: .6;
+}
+
+html[data-theme='dark'] .app-shell {
+  background: transparent !important;
+}
+
+.glass-sidebar,
+.glass-header,
+.glass-plan-pool,
+.glass-calendar,
+.glass-list,
+.glass-soft,
+.glass-popover,
+.glass-command,
+.glass-mobile-nav,
+.modal-card {
+  border-color: var(--glass-border) !important;
+  background: linear-gradient(145deg, var(--glass-surface-strong), var(--glass-surface)) !important;
+  box-shadow: var(--glass-shadow);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(145%);
+  backdrop-filter: blur(var(--glass-blur)) saturate(145%);
+}
+
+.glass-sidebar {
+  background: linear-gradient(165deg, rgb(255 255 255 / 72%), rgb(248 248 255 / 48%)) !important;
+  box-shadow: 14px 0 45px rgb(67 55 116 / 8%);
+}
+
+.glass-header {
+  background: linear-gradient(90deg, rgb(255 255 255 / 58%), rgb(255 255 255 / 72%)) !important;
+  box-shadow: 0 12px 32px rgb(67 55 116 / 6%);
+}
+
+.glass-plan-pool {
+  background: linear-gradient(160deg, rgb(255 255 255 / 72%), rgb(245 244 252 / 58%)) !important;
+  box-shadow: -20px 0 60px rgb(67 55 116 / 12%);
+}
+
+.glass-calendar,
+.glass-list {
+  overflow: hidden;
+  border-radius: 20px !important;
+}
+
+.glass-calendar {
+  box-shadow: var(--glass-shadow-raised);
+}
+
+.glass-calendar [class*="bg-[#fafafa]"] {
+  background: rgb(255 255 255 / 30%) !important;
+}
+
+.glass-calendar .bg-white {
+  background: rgb(255 255 255 / 15%) !important;
+}
+
+.glass-calendar [class*="border-[#dedede]"],
+.glass-calendar [class*="border-[#e6e6e6]"],
+.glass-calendar [class*="border-[#e7e7e7]"] {
+  border-color: var(--glass-line) !important;
+}
+
+.glass-calendar [class*="bg-violet-50/30"] {
+  background: linear-gradient(180deg, rgb(139 92 246 / 13%), rgb(139 92 246 / 5%)) !important;
+}
+
+.glass-soft {
+  background: linear-gradient(145deg, var(--glass-surface-soft), rgb(255 255 255 / 28%)) !important;
+  box-shadow: 0 12px 36px rgb(67 55 116 / 8%);
+}
+
+.glass-popover {
+  box-shadow: var(--glass-shadow-raised) !important;
+}
+
+.glass-command {
+  border-radius: 16px !important;
+  background: linear-gradient(135deg, rgb(255 255 255 / 68%), rgb(255 255 255 / 45%)) !important;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 60%), 0 8px 28px rgb(67 55 116 / 8%);
+}
+
+.glass-command:focus-within {
+  border-color: rgb(118 87 246 / 50%) !important;
+  box-shadow: 0 0 0 4px rgb(118 87 246 / 10%), 0 12px 34px rgb(67 55 116 / 11%);
+}
+
+.glass-item {
+  border-color: var(--glass-border) !important;
+  background: linear-gradient(145deg, rgb(255 255 255 / 72%), rgb(255 255 255 / 44%)) !important;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 68%), 0 8px 22px rgb(67 55 116 / 7%) !important;
+}
+
+.glass-item:hover {
+  border-color: rgb(118 87 246 / 28%) !important;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 70%), 0 12px 28px rgb(67 55 116 / 12%) !important;
+}
+
+.glass-segment {
+  border-color: var(--glass-border) !important;
+  background: rgb(255 255 255 / 32%) !important;
+  box-shadow: inset 0 1px 2px rgb(67 55 116 / 8%);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
+
+.glass-segment .bg-white {
+  background: rgb(255 255 255 / 82%) !important;
+  box-shadow: 0 4px 12px rgb(67 55 116 / 12%), inset 0 1px 0 white !important;
+}
+
+.brand-mark,
+.app-shell .bg-black {
+  border: 1px solid rgb(255 255 255 / 25%);
+  background: linear-gradient(135deg, #8b6df8 0%, #6545e8 52%, #4338ca 100%) !important;
+  color: white !important;
+  box-shadow: 0 7px 20px rgb(99 70 229 / 28%), inset 0 1px 0 rgb(255 255 255 / 30%);
+}
+
+.brand-mark {
+  border-radius: 11px !important;
+}
+
+.app-shell .bg-black:hover {
+  background: linear-gradient(135deg, #8163f5, #5639d7) !important;
+}
+
+.glass-sidebar nav button,
+.glass-mobile-nav button,
+.icon-button,
+.app-shell button {
+  transition: border-color 160ms ease, background-color 160ms ease, color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+.glass-sidebar nav button {
+  border: 1px solid transparent;
+  border-radius: 10px;
+}
+
+.glass-sidebar nav button:hover {
+  background: rgb(255 255 255 / 38%) !important;
+}
+
+.glass-sidebar nav button[aria-pressed='true'] {
+  border-color: var(--glass-border);
+  background: linear-gradient(135deg, rgb(255 255 255 / 82%), rgb(255 255 255 / 50%)) !important;
+  box-shadow: 0 7px 18px rgb(67 55 116 / 9%), inset 0 1px 0 white;
+}
+
+.icon-button {
+  border-color: var(--glass-border);
+  border-radius: 10px;
+  background: rgb(255 255 255 / 48%);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 70%), 0 4px 12px rgb(67 55 116 / 6%);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
+
+.icon-button:hover {
+  border-color: rgb(118 87 246 / 28%);
+  background: rgb(255 255 255 / 75%);
+  box-shadow: 0 7px 18px rgb(67 55 116 / 11%);
+  transform: translateY(-1px);
+}
+
+.field-input {
+  border-color: var(--glass-border);
+  border-radius: 10px;
+  background: rgb(255 255 255 / 48%);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 55%);
+}
+
+.field-input:focus {
+  border-color: rgb(118 87 246 / 55%);
+  background: rgb(255 255 255 / 72%);
+  box-shadow: 0 0 0 4px rgb(118 87 246 / 11%), inset 0 1px 0 white;
+}
+
+.calendar-range {
+  accent-color: var(--accent-strong);
+}
+
+.modal-backdrop {
+  background: rgb(27 23 45 / 30%);
+  -webkit-backdrop-filter: blur(10px) saturate(120%);
+  backdrop-filter: blur(10px) saturate(120%);
+}
+
+.modal-card {
+  border-radius: 20px;
+  box-shadow: var(--glass-shadow-raised);
+}
+
+.modal-card > [class*="border-b"],
+.modal-card > [class*="border-t"] {
+  border-color: var(--glass-line) !important;
+}
+
+.plan-work,
+.plan-study,
+.plan-health,
+.plan-life,
+.plan-other {
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 35%), 0 4px 12px rgb(67 55 116 / 6%);
+}
+
+.plan-work { background: linear-gradient(135deg, rgb(237 233 254 / 88%), rgb(221 214 254 / 68%)); }
+.plan-study { background: linear-gradient(135deg, rgb(224 242 254 / 88%), rgb(186 230 253 / 62%)); }
+.plan-health { background: linear-gradient(135deg, rgb(209 250 229 / 88%), rgb(167 243 208 / 60%)); }
+.plan-life { background: linear-gradient(135deg, rgb(254 243 199 / 90%), rgb(253 230 138 / 60%)); }
+.plan-other { background: linear-gradient(135deg, rgb(244 244 245 / 90%), rgb(228 228 231 / 66%)); }
+
+.glass-list > div {
+  border-color: var(--glass-line) !important;
+}
+
+.glass-list > div:hover {
+  background: rgb(255 255 255 / 32%) !important;
+}
+
+.app-shell button:focus-visible,
+.app-shell input:focus-visible,
+.app-shell select:focus-visible,
+.app-shell textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+html[data-theme='dark'] .glass-sidebar {
+  background: linear-gradient(165deg, rgb(24 23 36 / 78%), rgb(14 15 24 / 62%)) !important;
+}
+
+html[data-theme='dark'] .glass-header {
+  background: linear-gradient(90deg, rgb(15 15 24 / 65%), rgb(24 23 36 / 74%)) !important;
+}
+
+html[data-theme='dark'] .glass-plan-pool {
+  background: linear-gradient(160deg, rgb(25 24 38 / 80%), rgb(15 15 24 / 68%)) !important;
+}
+
+html[data-theme='dark'] .glass-calendar [class*="bg-[#fafafa]"],
+html[data-theme='dark'] .glass-calendar .bg-white {
+  background: rgb(255 255 255 / 2.5%) !important;
+}
+
+html[data-theme='dark'] .glass-calendar [class*="bg-violet-50/30"] {
+  background: linear-gradient(180deg, rgb(139 92 246 / 16%), rgb(139 92 246 / 5%)) !important;
+}
+
+html[data-theme='dark'] .glass-soft {
+  background: linear-gradient(145deg, rgb(35 33 51 / 54%), rgb(20 20 31 / 44%)) !important;
+}
+
+html[data-theme='dark'] .glass-command,
+html[data-theme='dark'] .glass-item {
+  background: linear-gradient(135deg, rgb(35 33 51 / 66%), rgb(22 22 34 / 50%)) !important;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 7%), 0 10px 28px rgb(0 0 0 / 20%) !important;
+}
+
+html[data-theme='dark'] .glass-segment {
+  background: rgb(0 0 0 / 20%) !important;
+  box-shadow: inset 0 1px 3px rgb(0 0 0 / 32%);
+}
+
+html[data-theme='dark'] .glass-segment .bg-white {
+  background: rgb(255 255 255 / 10%) !important;
+  color: #f4f4f5 !important;
+  box-shadow: 0 5px 16px rgb(0 0 0 / 24%), inset 0 1px 0 rgb(255 255 255 / 10%) !important;
+}
+
+html[data-theme='dark'] .glass-sidebar nav button:hover {
+  background: rgb(255 255 255 / 5%) !important;
+}
+
+html[data-theme='dark'] .glass-sidebar nav button[aria-pressed='true'] {
+  border-color: var(--glass-border);
+  background: linear-gradient(135deg, rgb(255 255 255 / 11%), rgb(255 255 255 / 5%)) !important;
+  box-shadow: 0 9px 24px rgb(0 0 0 / 24%), inset 0 1px 0 rgb(255 255 255 / 10%);
+}
+
+html[data-theme='dark'] .icon-button {
+  border-color: var(--glass-border);
+  background: rgb(255 255 255 / 6%);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 8%), 0 5px 14px rgb(0 0 0 / 16%);
+}
+
+html[data-theme='dark'] .icon-button:hover {
+  border-color: rgb(167 139 250 / 34%);
+  background: rgb(255 255 255 / 10%);
+}
+
+html[data-theme='dark'] .field-input {
+  border-color: var(--glass-border);
+  background: rgb(255 255 255 / 6%);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 5%);
+}
+
+html[data-theme='dark'] .field-input:focus {
+  border-color: rgb(167 139 250 / 58%);
+  background: rgb(255 255 255 / 9%);
+  box-shadow: 0 0 0 4px rgb(167 139 250 / 12%);
+}
+
+html[data-theme='dark'] .modal-backdrop {
+  background: rgb(0 0 0 / 52%);
+}
+
+html[data-theme='dark'] .modal-card {
+  border-color: var(--glass-border);
+  background: linear-gradient(145deg, rgb(29 28 43 / 88%), rgb(17 17 27 / 82%)) !important;
+  box-shadow: var(--glass-shadow-raised);
+}
+
+html[data-theme='dark'] .plan-work { border-color: #6d4cb5; background: linear-gradient(135deg, rgb(76 45 125 / 85%), rgb(45 27 78 / 76%)); }
+html[data-theme='dark'] .plan-study { border-color: #16729e; background: linear-gradient(135deg, rgb(16 64 88 / 85%), rgb(16 45 62 / 76%)); }
+html[data-theme='dark'] .plan-health { border-color: #168060; background: linear-gradient(135deg, rgb(18 77 59 / 85%), rgb(18 55 44 / 76%)); }
+html[data-theme='dark'] .plan-life { border-color: #9b6a1d; background: linear-gradient(135deg, rgb(79 57 23 / 88%), rgb(59 43 18 / 78%)); }
+html[data-theme='dark'] .plan-other { border-color: #5f5f6b; background: linear-gradient(135deg, rgb(49 49 55 / 88%), rgb(39 39 42 / 78%)); }
+
+html[data-theme='dark'] .glass-list > div:hover {
+  background: rgb(255 255 255 / 4%) !important;
+}
+
+@media (max-width: 767px) {
+  .glass-header {
+    background: var(--glass-surface-strong) !important;
+  }
+
+  .glass-mobile-nav {
+    margin: 0 10px 10px;
+    border: 1px solid var(--glass-border) !important;
+    border-radius: 18px;
+    box-shadow: var(--glass-shadow-raised);
+  }
+}
+
+@supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+  .glass-sidebar,
+  .glass-header,
+  .glass-plan-pool,
+  .glass-calendar,
+  .glass-list,
+  .glass-soft,
+  .glass-popover,
+  .glass-command,
+  .glass-mobile-nav,
+  .modal-card {
+    background: var(--glass-surface-strong) !important;
+  }
+}

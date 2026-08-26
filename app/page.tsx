@@ -760,7 +760,7 @@ export default function Home() {
   const title = section === 'calendar' ? '我的计划' : section === 'inbox' ? '快捷收集箱' : '已完成';
 
   return (
-    <main className="min-h-screen bg-white text-[#202020]">
+    <main className="app-shell min-h-screen bg-white text-[#202020]">
       <Sidebar
         section={section}
         setSection={setSection}
@@ -773,7 +773,7 @@ export default function Home() {
       />
 
       <section className="min-h-screen md:pl-[224px]">
-        <header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b border-[#e4e4e4] bg-white/95 px-4 backdrop-blur md:px-7">
+        <header className="glass-header sticky top-0 z-20 flex h-16 items-center justify-between border-b border-[#e4e4e4] bg-white/95 px-4 backdrop-blur md:px-7">
           <div>
             <h1 className="text-base font-semibold md:text-lg">{title}</h1>
             <p className="hidden text-xs text-[#777] sm:block">
@@ -981,12 +981,12 @@ function PlanPool({
   return (
     <>
       {open && <button aria-label="关闭计划池" onClick={onClose} className="fixed inset-0 top-16 z-30 bg-black/20 backdrop-blur-[1px] xl:hidden" />}
-      <aside className={`fixed bottom-0 right-0 top-16 z-40 flex w-[min(336px,92vw)] flex-col border-l border-[#dedede] bg-[#f8f8f8] p-4 shadow-[-12px_0_40px_rgba(0,0,0,.08)] transition-transform duration-200 xl:z-10 xl:shadow-none ${open ? 'translate-x-0' : 'translate-x-full pointer-events-none'}`}>
+      <aside className={`glass-plan-pool fixed bottom-0 right-0 top-16 z-40 flex w-[min(336px,92vw)] flex-col border-l border-[#dedede] bg-[#f8f8f8] p-4 shadow-[-12px_0_40px_rgba(0,0,0,.08)] transition-transform duration-200 xl:z-10 ${open ? 'translate-x-0' : 'translate-x-full pointer-events-none'}`}>
         <div className="flex items-start justify-between">
           <div><div className="flex items-center gap-2"><h2 className="text-sm font-semibold">计划池</h2><span className="rounded-full bg-[#e9e9e9] px-2 py-0.5 text-[9px] text-[#666]">{items.length} 待安排</span></div><p className="mt-1 text-[11px] text-[#777]">先收集想做的事，再拖到日历安排</p></div>
           <div className="flex gap-1"><button onClick={onCreate} aria-label="添加计划池事项" className="icon-button size-8"><CirclePlus className="size-3.5" /></button><button onClick={onClose} aria-label="关闭计划池" className="icon-button size-8 xl:hidden"><X className="size-3.5" /></button></div>
         </div>
-        <div className="mt-4 grid grid-cols-2 rounded-lg border border-[#dedede] bg-[#eee] p-1 text-[11px] font-medium">
+        <div className="glass-segment mt-4 grid grid-cols-2 rounded-lg border border-[#dedede] bg-[#eee] p-1 text-[11px] font-medium">
           {(['week', 'month'] as PoolScope[]).map((value) => <button key={value} onClick={() => setScope(value)} className={`rounded-md py-1.5 transition ${scope === value ? 'bg-white text-black shadow-sm' : 'text-[#777] hover:text-black'}`}>{value === 'week' ? '本周' : '本月'}</button>)}
         </div>
         <div className="mt-3 flex items-center justify-between text-[10px] text-[#888]"><span>进度 {scheduled}/{total}</span><span>拖动卡片到日历</span></div>
@@ -999,7 +999,7 @@ function PlanPool({
               onDragStart={(event) => onDragStart(event, { kind: 'pool', id: item.id })}
               onDragEnd={onDragEnd}
               onClick={() => onEdit(item)}
-              className={`group cursor-grab rounded-lg border border-[#dedede] bg-white p-3 shadow-[0_1px_1px_rgba(0,0,0,.03)] transition hover:-translate-y-px hover:border-[#bbb] hover:shadow-sm active:cursor-grabbing ${dragging?.kind === 'pool' && dragging.id === item.id ? 'opacity-40' : ''}`}
+              className={`glass-item group cursor-grab rounded-lg border border-[#dedede] bg-white p-3 shadow-[0_1px_1px_rgba(0,0,0,.03)] transition hover:-translate-y-px hover:border-[#bbb] hover:shadow-sm active:cursor-grabbing ${dragging?.kind === 'pool' && dragging.id === item.id ? 'opacity-40' : ''}`}
             >
               <div className="flex items-start gap-2">
                 <GripVertical className="mt-0.5 size-3.5 shrink-0 text-[#bbb] group-hover:text-[#777]" />
@@ -1053,9 +1053,9 @@ function Sidebar({
   onManageCategories: () => void;
 }) {
   return (
-    <aside className="fixed inset-y-0 left-0 z-30 hidden w-[224px] border-r border-[#dedede] bg-[#f6f6f6] p-3 md:flex md:flex-col">
+    <aside className="glass-sidebar fixed inset-y-0 left-0 z-30 hidden w-[224px] border-r border-[#dedede] bg-[#f6f6f6] p-3 md:flex md:flex-col">
       <div className="flex items-center gap-2.5 px-2 py-2">
-        <div className="grid size-8 place-items-center rounded-lg bg-black text-sm font-bold text-white">K</div>
+        <div className="brand-mark grid size-8 place-items-center rounded-lg bg-black text-sm font-bold text-white">K</div>
         <div>
           <p className="text-sm font-semibold">Kekaku</p>
           <p className="text-[11px] text-[#777]">让计划真正发生</p>
@@ -1081,7 +1081,7 @@ function Sidebar({
         ))}
       </div>
 
-      <div className="mt-auto rounded-lg border border-[#dfdfdf] bg-white p-3">
+      <div className="glass-soft mt-auto rounded-lg border border-[#dfdfdf] bg-white p-3">
         <div className="mb-2 flex items-center gap-2 text-xs font-medium"><Sparkles className="size-3.5 text-violet-600" /> DeepSeek 计划助手</div>
         <p className="text-[11px] leading-5 text-[#777]">说出目标，AI 帮你拆成今天能完成的步骤。</p>
         <div className="mt-3 flex items-center gap-2 text-[10px] text-emerald-700"><span className="size-1.5 rounded-full bg-emerald-500" /> 服务端安全连接</div>
@@ -1092,7 +1092,7 @@ function Sidebar({
 
 function SideNavButton({ active, onClick, icon, label, count }: { active: boolean; onClick: () => void; icon: React.ReactNode; label: string; count?: number }) {
   return (
-    <button onClick={onClick} className={`flex w-full items-center gap-3 rounded-md px-3 py-2 text-left font-medium transition ${active ? 'bg-[#e9e9e9] text-[#202020]' : 'text-[#666] hover:bg-[#ededed]'}`}>
+    <button onClick={onClick} aria-pressed={active} className={`flex w-full items-center gap-3 rounded-md px-3 py-2 text-left font-medium transition ${active ? 'bg-[#e9e9e9] text-[#202020]' : 'text-[#666] hover:bg-[#ededed]'}`}>
       {icon} {label} {typeof count === 'number' && count > 0 && <span className="ml-auto rounded-full bg-white px-1.5 py-0.5 text-[10px] text-[#666]">{count}</span>}
     </button>
   );
@@ -1105,7 +1105,7 @@ function ViewSwitch({ value, onChange }: { value: ViewMode; onChange: (value: Vi
     { value: 'day', label: '日', icon: <Calendar1 className="size-3.5" /> },
   ];
   return (
-    <div className="flex rounded-lg border border-[#dedede] bg-[#f6f6f6] p-1 text-xs font-medium">
+    <div className="glass-segment flex rounded-lg border border-[#dedede] bg-[#f6f6f6] p-1 text-xs font-medium">
       {options.map((option) => (
         <button key={option.value} onClick={() => onChange(option.value)} aria-pressed={value === option.value} className={`flex items-center gap-1.5 rounded-md px-2.5 py-1.5 transition sm:px-3 ${value === option.value ? 'bg-white text-black shadow-sm' : 'text-[#666] hover:text-black'}`}>
           <span className="hidden sm:block">{option.icon}</span>{option.label}
@@ -1140,7 +1140,7 @@ function CalendarLayoutControl({ width, timeline, onWidthChange, onTimelineChang
         <span className="hidden lg:inline">布局</span>
       </button>
       {open && (
-        <div id="calendar-layout-panel" className="absolute right-0 top-11 z-50 w-72 rounded-xl border border-[#dedede] bg-white p-4 shadow-xl">
+        <div id="calendar-layout-panel" className="glass-popover absolute right-0 top-11 z-50 w-72 rounded-xl border border-[#dedede] bg-white p-4 shadow-xl">
           <div className="flex items-center justify-between">
             <div><p className="text-xs font-semibold">日历布局</p><p className="mt-1 text-[10px] text-[#777]">设置会自动保存在当前设备</p></div>
             <span className="rounded-md bg-[#f2f2f2] px-2 py-1 text-xs font-semibold tabular-nums">{pad(timeline.startHour)}–{pad(timeline.endHour)}</span>
@@ -1228,7 +1228,7 @@ function PlannerToolbar({
           <h2 className="ml-1 text-base font-semibold sm:text-lg">{rangeTitle}</h2>
         </div>
 
-        <form onSubmit={onSubmit} className="flex min-w-0 flex-1 items-center gap-2 rounded-xl border border-[#d8d8d8] bg-[#fafafa] p-1.5 transition focus-within:border-[#999] focus-within:bg-white lg:max-w-[520px]">
+        <form onSubmit={onSubmit} className="glass-command flex min-w-0 flex-1 items-center gap-2 rounded-xl border border-[#d8d8d8] bg-[#fafafa] p-1.5 transition focus-within:border-[#999] focus-within:bg-white lg:max-w-[520px]">
           <Sparkles className="ml-2 size-4 shrink-0 text-violet-600" />
           <input value={quickPrompt} onChange={(event) => setQuickPrompt(event.target.value)} className="min-w-0 flex-1 bg-transparent px-1 text-sm outline-none" placeholder="快捷计划：下周完成发布准备，每天安排 1 小时" aria-label="快捷计划描述" />
           <button disabled={!quickPrompt.trim() || loading} className="flex shrink-0 items-center gap-1.5 rounded-lg bg-black px-3 py-2 text-xs font-medium text-white transition hover:bg-[#292929] disabled:cursor-not-allowed disabled:opacity-40">
@@ -1247,7 +1247,7 @@ function MonthView({ anchorDate, today, plans, categoryMeta, onCreate, onEdit, o
   const gridStart = startOfWeek(first);
   const days = Array.from({ length: 42 }, (_, index) => addDays(gridStart, index));
   return (
-    <div className="overflow-auto rounded-xl border border-[#dedede] bg-white shadow-[0_1px_2px_rgba(0,0,0,.04)]">
+    <div className="glass-calendar overflow-auto rounded-xl border border-[#dedede] bg-white shadow-[0_1px_2px_rgba(0,0,0,.04)]">
       <div className="grid min-w-[760px] grid-cols-7 border-b border-[#dedede] bg-[#fafafa]">
         {monthWeekdays.map((day) => <div key={day} className="px-3 py-3 text-center text-[11px] font-medium text-[#777]">周{day}</div>)}
       </div>
@@ -1289,7 +1289,7 @@ function WeekView({ days, today, plans, categoryMeta, timeline, onCreate, onEdit
   const timelineHeight = (timeline.endHour - timeline.startHour) * timeline.hourHeight;
   const timelineStyle = { height: timelineHeight, '--hour-height': `${timeline.hourHeight}px` } as CSSProperties;
   return (
-    <div className="overflow-auto rounded-xl border border-[#dedede] bg-white shadow-[0_1px_2px_rgba(0,0,0,.04)]">
+    <div className="glass-calendar overflow-auto rounded-xl border border-[#dedede] bg-white shadow-[0_1px_2px_rgba(0,0,0,.04)]">
       <div className="grid min-w-[920px] grid-cols-[56px_repeat(7,minmax(122px,1fr))] border-b border-[#dedede] bg-[#fafafa]">
         <div />
         {days.map((day, index) => (
@@ -1332,7 +1332,7 @@ function DayView({ day, today, plans, categoryMeta, timeline, onCreate, onEdit, 
   const timelineStyle = { height: timelineHeight, '--hour-height': `${timeline.hourHeight}px` } as CSSProperties;
   return (
     <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_280px]">
-      <div className="overflow-hidden rounded-xl border border-[#dedede] bg-white shadow-[0_1px_2px_rgba(0,0,0,.04)]">
+      <div className="glass-calendar overflow-hidden rounded-xl border border-[#dedede] bg-white shadow-[0_1px_2px_rgba(0,0,0,.04)]">
         <div className="flex items-center justify-between border-b border-[#dedede] bg-[#fafafa] px-5 py-4">
           <div className="flex items-center gap-3"><span className={`grid size-9 place-items-center rounded-full text-sm font-semibold ${isSameDay(day, today) ? 'bg-black text-white' : 'bg-[#ededed]'}`}>{day.getDate()}</span><div><p className="text-sm font-semibold">{weekdayNames[(day.getDay() + 6) % 7]}</p><p className="text-[11px] text-[#777]">{formatChineseDate(day)}</p></div></div>
           <button onClick={() => onCreate(day)} className="flex items-center gap-1.5 rounded-lg bg-black px-3 py-2 text-xs font-medium text-white"><CirclePlus className="size-3.5" />添加</button>
@@ -1351,7 +1351,7 @@ function DayView({ day, today, plans, categoryMeta, timeline, onCreate, onEdit, 
           </div>
         </div>
       </div>
-      <aside className="h-fit rounded-xl border border-[#dedede] bg-[#fafafa] p-4">
+      <aside className="glass-soft h-fit rounded-xl border border-[#dedede] bg-[#fafafa] p-4">
         <p className="text-xs font-semibold">今日摘要</p>
         <div className="mt-3 flex items-end gap-2"><span className="text-3xl font-semibold">{dayPlans.length}</span><span className="pb-1 text-xs text-[#777]">项计划</span></div>
         <div className="mt-4 space-y-3">
@@ -1397,7 +1397,7 @@ function PlanList({ plans, categoryMeta, emptyText, onEdit, onToggle }: { plans:
   return (
     <div className="mx-auto max-w-3xl">
       <div className="mb-5 flex items-center justify-between"><p className="text-sm text-[#777]">共 {sorted.length} 项</p></div>
-      <div className="overflow-hidden rounded-xl border border-[#dedede] bg-white">
+      <div className="glass-list overflow-hidden rounded-xl border border-[#dedede] bg-white">
         {sorted.map((plan) => (
           <div key={plan.id} className="flex items-center gap-3 border-b border-[#ececec] p-4 last:border-b-0 hover:bg-[#fafafa]">
             <button onClick={() => onToggle(plan.id)} aria-label={plan.completed ? '恢复为未完成' : '标记为已完成'} className={`grid size-6 shrink-0 place-items-center rounded-full border ${plan.completed ? 'border-black bg-black text-white' : 'border-[#ccc] text-transparent hover:text-[#999]'}`}><Check className="size-3.5" /></button>
@@ -1528,7 +1528,7 @@ function AiPreviewModal({ preview, categoryMeta, onClose, onAdd }: { preview: Ai
 
 function MobileNav({ section, setSection, onCreate }: { section: Section; setSection: (section: Section) => void; onCreate: () => void }) {
   return (
-    <nav className="fixed inset-x-0 bottom-0 z-30 flex items-center justify-around border-t border-[#dedede] bg-white/95 px-3 py-2 backdrop-blur md:hidden">
+    <nav className="glass-mobile-nav fixed inset-x-0 bottom-0 z-30 flex items-center justify-around border-t border-[#dedede] bg-white/95 px-3 py-2 backdrop-blur md:hidden">
       <button onClick={() => setSection('calendar')} className={`mobile-nav-item ${section === 'calendar' ? 'text-black' : 'text-[#888]'}`}><LayoutGrid className="size-5" />计划</button>
       <button onClick={onCreate} className="mobile-nav-item text-[#555]"><CirclePlus className="size-5" />新建</button>
       <button onClick={() => setSection('inbox')} className={`mobile-nav-item ${section === 'inbox' ? 'text-black' : 'text-[#888]'}`}><Sparkles className="size-5" />AI 计划</button>
