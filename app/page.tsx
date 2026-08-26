@@ -10,20 +10,24 @@ import {
   ChevronRight,
   CirclePlus,
   Clock3,
+  GripVertical,
   Inbox,
   LayoutGrid,
+  ListTodo,
   LoaderCircle,
   Sparkles,
   Trash2,
   WandSparkles,
   X,
 } from 'lucide-react';
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { DragEvent as ReactDragEvent, FormEvent, useEffect, useMemo, useState } from 'react';
 
 type ViewMode = 'month' | 'week' | 'day';
 type Category = 'work' | 'study' | 'health' | 'life' | 'other';
 type Section = 'calendar' | 'inbox' | 'completed';
 type Source = 'manual' | 'ai' | 'quick';
+type PoolScope = 'week' | 'month';
+type Priority = 'high' | 'medium' | 'low';
 
 type Plan = {
   id: string;
@@ -35,6 +39,7 @@ type Plan = {
   note: string;
   completed: boolean;
   source: Source;
+  poolId?: string;
 };
 
 type PlanDraft = Omit<Plan, 'id' | 'completed' | 'source'>;
@@ -45,7 +50,30 @@ type AiPreview = {
   source: 'ai' | 'quick';
 };
 
+type PoolItem = {
+  id: string;
+  title: string;
+  scope: PoolScope;
+  duration: number;
+  priority: Priority;
+  category: Category;
+  note: string;
+  scheduled: boolean;
+};
+
+type PoolDraft = Omit<PoolItem, 'id' | 'scheduled'>;
+type DragPayload = { kind: 'plan' | 'pool'; id: string };
+type CalendarDragProps = {
+  onDrop: (event: ReactDragEvent, date: Date, startTime?: string) => void;
+  onDragStart: (event: ReactDragEvent, payload: DragPayload) => void;
+  onDragEnd: () => void;
+  dropTarget: string | null;
+  setDropTarget: (value: string | null) => void;
+};
+
 const STORAGE_KEY = 'kekaku-plans-v1';
+const POOL_STORAGE_KEY = 'kekaku-plan-pool-v1';
+const DRAG_MIME = 'application/x-kekaku-plan';
 const weekdayNames = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
 const monthWeekdays = ['一', '二', '三', '四', '五', '六', '日'];
 const timelineHours = Array.from({ length: 13 }, (_, index) => index + 8);
@@ -56,6 +84,12 @@ const categoryMeta: Record<Category, { label: string; card: string; dot: string 
   health: { label: '健康', card: 'plan-health', dot: 'bg-emerald-500' },
   life: { label: '生活', card: 'plan-life', dot: 'bg-amber-500' },
   other: { label: '其他', card: 'plan-other', dot: 'bg-zinc-500' },
+};
+
+const priorityMeta: Record<Priority, { label: string; className: string }> = {
+  high: { label: '高优先', className: 'bg-red-50 text-red-700' },
+  medium: { label: '中优先', className: 'bg-amber-50 text-amber-700' },
+  low: { label: '低优先', className: 'bg-zinc-100 text-zinc-600' },
 };
 
 function pad(value: number) {
@@ -106,6 +140,28 @@ function minutes(value: string) {
 
 function newId() {
   return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
+}
+
+function durationLabel(value: number) {
+  if (value < 60) return `${value} 分钟`;
+  if (value % 60 === 0) return `${value / 60} 小时`;
+  return `${Math.floor(value / 60)} 小时 ${value % 60} 分`;
+}
+
+function addMinutesToTime(value: string, amount: number) {
+  const total = Math.min(23 * 60 + 59, Math.max(0, minutes(value) + amount));
+  return `${pad(Math.floor(total / 60))}:${pad(total % 60)}`;
+}
+
+function readDragPayload(event: ReactDragEvent): DragPayload | null {
+  try {
+    const raw = event.dataTransfer.getData(DRAG_MIME);
+    if (!raw) return null;
+    const payload = JSON.parse(raw) as DragPayload;
+    return (payload.kind === 'plan' || payload.kind === 'pool') && payload.id ? payload : null;
+  } catch {
+    return null;
+  }
 }
 
 function createSamplePlans(today: Date): Plan[] {
@@ -169,6 +225,15 @@ function createSamplePlans(today: Date): Plan[] {
   ];
 }
 
+function createSamplePool(): PoolItem[] {
+  return [
+    { id: 'pool-1', title: '准备产品发布材料', scope: 'week', duration: 180, priority: 'high', category: 'work', note: '整理发布清单、文案和演示素材', scheduled: false },
+    { id: 'pool-2', title: '完成季度阅读清单', scope: 'week', duration: 120, priority: 'medium', category: 'study', note: '读完剩余章节并做摘录', scheduled: false },
+    { id: 'pool-3', title: '整理旅行照片', scope: 'month', duration: 90, priority: 'low', category: 'life', note: '筛选、归档并挑选 20 张', scheduled: false },
+    { id: 'pool-4', title: '安排一次长距离慢跑', scope: 'month', duration: 90, priority: 'medium', category: 'health', note: '选择天气合适的周末上午', scheduled: false },
+  ];
+}
+
 function localQuickParse(prompt: string, today: Date): PlanDraft {
   let target = startOfDay(today);
   if (prompt.includes('后天')) target = addDays(target, 2);
@@ -210,26 +275,71 @@ function localQuickParse(prompt: string, today: Date): PlanDraft {
   };
 }
 
+function createLocalPoolSchedule(items: PoolItem[], rangeStart: Date, rangeEnd: Date, existing: Plan[]): PlanDraft[] {
+  const occupied = existing.map((plan) => ({ date: plan.date, start: minutes(plan.startTime), end: minutes(plan.endTime) }));
+  const ordered = [...items].sort((a, b) => ['high', 'medium', 'low'].indexOf(a.priority) - ['high', 'medium', 'low'].indexOf(b.priority));
+  const results: PlanDraft[] = [];
+
+  for (const item of ordered) {
+    let placed = false;
+    for (let day = startOfDay(rangeStart); day <= rangeEnd && !placed; day = addDays(day, 1)) {
+      for (let start = 9 * 60; start + item.duration <= 21 * 60; start += 30) {
+        const date = toISO(day);
+        const end = start + item.duration;
+        const conflicts = occupied.some((slot) => slot.date === date && start < slot.end && end > slot.start);
+        if (!conflicts) {
+          const draft: PlanDraft = {
+            title: item.title,
+            date,
+            startTime: `${pad(Math.floor(start / 60))}:${pad(start % 60)}`,
+            endTime: `${pad(Math.floor(end / 60))}:${pad(end % 60)}`,
+            category: item.category,
+            note: item.note || `计划池 · ${priorityMeta[item.priority].label}`,
+            poolId: item.id,
+          };
+          results.push(draft);
+          occupied.push({ date, start, end });
+          placed = true;
+          break;
+        }
+      }
+    }
+  }
+  return results;
+}
+
 export default function Home() {
   const [view, setView] = useState<ViewMode>('week');
   const [section, setSection] = useState<Section>('calendar');
   const [anchorDate, setAnchorDate] = useState(() => startOfDay(new Date()));
   const [plans, setPlans] = useState<Plan[]>([]);
+  const [poolItems, setPoolItems] = useState<PoolItem[]>([]);
+  const [poolScope, setPoolScope] = useState<PoolScope>('week');
+  const [poolOpen, setPoolOpen] = useState(true);
   const [hydrated, setHydrated] = useState(false);
   const [planModalOpen, setPlanModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState<PlanDraft>(() => emptyDraft(new Date()));
+  const [poolModalOpen, setPoolModalOpen] = useState(false);
+  const [poolEditingId, setPoolEditingId] = useState<string | null>(null);
+  const [poolDraft, setPoolDraft] = useState<PoolDraft>(() => emptyPoolDraft('week'));
   const [quickPrompt, setQuickPrompt] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
+  const [poolAiLoading, setPoolAiLoading] = useState(false);
   const [aiPreview, setAiPreview] = useState<AiPreview | null>(null);
+  const [dragging, setDragging] = useState<DragPayload | null>(null);
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
   const [toast, setToast] = useState('');
 
   useEffect(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
       setPlans(saved ? JSON.parse(saved) : createSamplePlans(new Date()));
+      const savedPool = localStorage.getItem(POOL_STORAGE_KEY);
+      setPoolItems(savedPool ? JSON.parse(savedPool) : createSamplePool());
     } catch {
       setPlans(createSamplePlans(new Date()));
+      setPoolItems(createSamplePool());
     }
     setHydrated(true);
   }, []);
@@ -237,6 +347,10 @@ export default function Home() {
   useEffect(() => {
     if (hydrated) localStorage.setItem(STORAGE_KEY, JSON.stringify(plans));
   }, [hydrated, plans]);
+
+  useEffect(() => {
+    if (hydrated) localStorage.setItem(POOL_STORAGE_KEY, JSON.stringify(poolItems));
+  }, [hydrated, poolItems]);
 
   useEffect(() => {
     if (!toast) return;
@@ -251,6 +365,10 @@ export default function Home() {
     [plans],
   );
   const completedPlans = useMemo(() => plans.filter((plan) => plan.completed), [plans]);
+  const visiblePoolItems = useMemo(
+    () => poolItems.filter((item) => item.scope === poolScope && !item.scheduled),
+    [poolItems, poolScope],
+  );
 
   const weekStart = startOfWeek(anchorDate);
   const weekDays = Array.from({ length: 7 }, (_, index) => addDays(weekStart, index));
@@ -275,8 +393,43 @@ export default function Home() {
       endTime: plan.endTime,
       category: plan.category,
       note: plan.note,
+      poolId: plan.poolId,
     });
     setPlanModalOpen(true);
+  };
+
+  const openPoolCreate = () => {
+    setPoolEditingId(null);
+    setPoolDraft(emptyPoolDraft(poolScope));
+    setPoolModalOpen(true);
+  };
+
+  const openPoolEdit = (item: PoolItem) => {
+    setPoolEditingId(item.id);
+    setPoolDraft({ title: item.title, scope: item.scope, duration: item.duration, priority: item.priority, category: item.category, note: item.note });
+    setPoolModalOpen(true);
+  };
+
+  const savePoolItem = (event: FormEvent) => {
+    event.preventDefault();
+    if (!poolDraft.title.trim()) return;
+    if (poolEditingId) {
+      setPoolItems((current) => current.map((item) => item.id === poolEditingId ? { ...item, ...poolDraft, title: poolDraft.title.trim() } : item));
+      setToast('计划池事项已更新');
+    } else {
+      setPoolItems((current) => [...current, { ...poolDraft, title: poolDraft.title.trim(), id: newId(), scheduled: false }]);
+      setPoolScope(poolDraft.scope);
+      setToast('已放入计划池');
+    }
+    setPoolModalOpen(false);
+  };
+
+  const deletePoolItem = () => {
+    if (!poolEditingId) return;
+    setPoolItems((current) => current.filter((item) => item.id !== poolEditingId));
+    setPlans((current) => current.filter((plan) => plan.poolId !== poolEditingId));
+    setPoolModalOpen(false);
+    setToast('已从计划池删除');
   };
 
   const savePlan = (event: FormEvent) => {
@@ -299,7 +452,9 @@ export default function Home() {
 
   const deleteEditingPlan = () => {
     if (!editingId) return;
+    const target = plans.find((plan) => plan.id === editingId);
     setPlans((current) => current.filter((plan) => plan.id !== editingId));
+    if (target?.poolId) setPoolItems((current) => current.map((item) => item.id === target.poolId ? { ...item, scheduled: false } : item));
     setPlanModalOpen(false);
     setToast('计划已删除');
   };
@@ -308,6 +463,69 @@ export default function Home() {
     setPlans((current) => current.map((plan) => (plan.id === id ? { ...plan, completed: !plan.completed } : plan)));
     setPlanModalOpen(false);
     setToast('完成状态已更新');
+  };
+
+  const startDragging = (event: ReactDragEvent, payload: DragPayload) => {
+    event.dataTransfer.setData(DRAG_MIME, JSON.stringify(payload));
+    event.dataTransfer.effectAllowed = 'move';
+    setDragging(payload);
+  };
+
+  const finishDragging = () => {
+    setDragging(null);
+    setDropTarget(null);
+  };
+
+  const dropOnCalendar = (event: ReactDragEvent, date: Date, startTime?: string) => {
+    event.preventDefault();
+    const payload = readDragPayload(event);
+    if (!payload) return finishDragging();
+    const dateValue = toISO(date);
+
+    if (payload.kind === 'plan') {
+      setPlans((current) => current.map((plan) => {
+        if (plan.id !== payload.id) return plan;
+        const duration = Math.max(30, minutes(plan.endTime) - minutes(plan.startTime));
+        const nextStart = startTime || plan.startTime;
+        return { ...plan, date: dateValue, startTime: nextStart, endTime: addMinutesToTime(nextStart, duration) };
+      }));
+      setToast('计划时间已调整');
+    } else {
+      const item = poolItems.find((candidate) => candidate.id === payload.id);
+      if (item) {
+        const nextStart = startTime || '09:00';
+        setPlans((current) => [...current, {
+          id: newId(), title: item.title, date: dateValue, startTime: nextStart,
+          endTime: addMinutesToTime(nextStart, item.duration), category: item.category,
+          note: item.note, completed: false, source: 'manual', poolId: item.id,
+        }]);
+        setPoolItems((current) => current.map((candidate) => candidate.id === item.id ? { ...candidate, scheduled: true } : candidate));
+        setToast('已从计划池安排到日历');
+      }
+    }
+    finishDragging();
+  };
+
+  const dropBackToPool = (event: ReactDragEvent) => {
+    event.preventDefault();
+    const payload = readDragPayload(event);
+    if (!payload || payload.kind !== 'plan') return finishDragging();
+    const plan = plans.find((candidate) => candidate.id === payload.id);
+    if (!plan) return finishDragging();
+    if (plan.poolId) {
+      setPoolItems((current) => current.map((item) => item.id === plan.poolId ? { ...item, scheduled: false } : item));
+    } else {
+      const planDate = fromISO(plan.date);
+      const isCurrentWeek = planDate >= startOfWeek(anchorDate) && planDate <= addDays(startOfWeek(anchorDate), 6);
+      setPoolItems((current) => [...current, {
+        id: newId(), title: plan.title, scope: isCurrentWeek ? 'week' : 'month',
+        duration: Math.max(30, minutes(plan.endTime) - minutes(plan.startTime)), priority: 'medium',
+        category: plan.category, note: plan.note, scheduled: false,
+      }]);
+    }
+    setPlans((current) => current.filter((candidate) => candidate.id !== plan.id));
+    setToast('已取消排期并放回计划池');
+    finishDragging();
   };
 
   const submitQuickPlan = async (event: FormEvent) => {
@@ -344,6 +562,39 @@ export default function Home() {
     }
   };
 
+  const autoSchedulePool = async () => {
+    if (!visiblePoolItems.length || poolAiLoading) {
+      if (!visiblePoolItems.length) setToast(`${poolScope === 'week' ? '本周' : '本月'}计划池还没有待安排事项`);
+      return;
+    }
+    const rangeStart = poolScope === 'week' ? startOfWeek(anchorDate) : new Date(anchorDate.getFullYear(), anchorDate.getMonth(), 1);
+    const rangeEnd = poolScope === 'week' ? addDays(rangeStart, 6) : new Date(anchorDate.getFullYear(), anchorDate.getMonth() + 1, 0);
+    const existing = activePlans.filter((plan) => plan.date >= toISO(rangeStart) && plan.date <= toISO(rangeEnd));
+    setPoolAiLoading(true);
+    try {
+      const response = await fetch('/api/ai-schedule', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tasks: visiblePoolItems,
+          existingPlans: existing.map(({ title, date, startTime, endTime }) => ({ title, date, startTime, endTime })),
+          rangeStart: toISO(rangeStart),
+          rangeEnd: toISO(rangeEnd),
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        }),
+      });
+      if (!response.ok) throw new Error('AI scheduling unavailable');
+      const result = (await response.json()) as { summary?: string; plans?: PlanDraft[] };
+      if (!result.plans?.length) throw new Error('No schedule returned');
+      setAiPreview({ summary: result.summary || 'DeepSeek 已结合优先级、时长和现有日程完成排期。', plans: result.plans, source: 'ai' });
+    } catch {
+      const fallback = createLocalPoolSchedule(visiblePoolItems, rangeStart, rangeEnd, existing);
+      setAiPreview({ summary: 'DeepSeek 暂时没有响应，已用本地无冲突规则生成排期，你可以预览后加入。', plans: fallback, source: 'quick' });
+    } finally {
+      setPoolAiLoading(false);
+    }
+  };
+
   const addAiPlans = () => {
     if (!aiPreview) return;
     const incoming: Plan[] = aiPreview.plans.map((plan) => ({
@@ -353,6 +604,10 @@ export default function Home() {
       source: aiPreview.source,
     }));
     setPlans((current) => [...current, ...incoming]);
+    const scheduledPoolIds = new Set(incoming.map((plan) => plan.poolId).filter(Boolean));
+    if (scheduledPoolIds.size) {
+      setPoolItems((current) => current.map((item) => scheduledPoolIds.has(item.id) ? { ...item, scheduled: true } : item));
+    }
     setQuickPrompt('');
     setAiPreview(null);
     setToast(`已加入 ${incoming.length} 条计划`);
@@ -385,11 +640,16 @@ export default function Home() {
             </p>
           </div>
           {section === 'calendar' && (
-            <ViewSwitch value={view} onChange={setView} />
+            <div className="flex items-center gap-2">
+              <button onClick={() => setPoolOpen((open) => !open)} aria-pressed={poolOpen} className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-2 text-xs font-medium transition ${poolOpen ? 'border-black bg-black text-white' : 'border-[#dedede] bg-white hover:bg-[#f6f6f6]'}`}>
+                <ListTodo className="size-3.5" /><span className="hidden sm:inline">计划池</span><span className="rounded-full bg-white/15 px-1.5 text-[9px]">{visiblePoolItems.length}</span>
+              </button>
+              <ViewSwitch value={view} onChange={setView} />
+            </div>
           )}
         </header>
 
-        <div className="mx-auto max-w-[1500px] p-4 md:p-7">
+        <div className={`mx-auto max-w-[1500px] p-4 md:p-7 ${section === 'calendar' && poolOpen ? 'xl:pr-[356px]' : ''}`}>
           {section === 'calendar' ? (
             <>
               <PlannerToolbar
@@ -412,6 +672,11 @@ export default function Home() {
                   plans={activePlans}
                   onCreate={openCreate}
                   onEdit={openEdit}
+                  onDrop={dropOnCalendar}
+                  onDragStart={startDragging}
+                  onDragEnd={finishDragging}
+                  dropTarget={dropTarget}
+                  setDropTarget={setDropTarget}
                 />
               )}
               {view === 'week' && (
@@ -421,6 +686,11 @@ export default function Home() {
                   plans={activePlans}
                   onCreate={openCreate}
                   onEdit={openEdit}
+                  onDrop={dropOnCalendar}
+                  onDragStart={startDragging}
+                  onDragEnd={finishDragging}
+                  dropTarget={dropTarget}
+                  setDropTarget={setDropTarget}
                 />
               )}
               {view === 'day' && (
@@ -430,6 +700,11 @@ export default function Home() {
                   plans={activePlans}
                   onCreate={openCreate}
                   onEdit={openEdit}
+                  onDrop={dropOnCalendar}
+                  onDragStart={startDragging}
+                  onDragEnd={finishDragging}
+                  dropTarget={dropTarget}
+                  setDropTarget={setDropTarget}
                 />
               )}
             </>
@@ -446,6 +721,25 @@ export default function Home() {
         <MobileNav section={section} setSection={setSection} onCreate={() => openCreate()} />
       </section>
 
+      {section === 'calendar' && (
+        <PlanPool
+          open={poolOpen}
+          scope={poolScope}
+          setScope={setPoolScope}
+          items={visiblePoolItems}
+          allItems={poolItems}
+          loading={poolAiLoading}
+          dragging={dragging}
+          onClose={() => setPoolOpen(false)}
+          onCreate={openPoolCreate}
+          onEdit={openPoolEdit}
+          onAutoSchedule={autoSchedulePool}
+          onDragStart={startDragging}
+          onDragEnd={finishDragging}
+          onDropBack={dropBackToPool}
+        />
+      )}
+
       {planModalOpen && (
         <PlanModal
           draft={draft}
@@ -456,6 +750,17 @@ export default function Home() {
           onClose={() => setPlanModalOpen(false)}
           onDelete={deleteEditingPlan}
           onToggleCompleted={() => editingId && toggleCompleted(editingId)}
+        />
+      )}
+
+      {poolModalOpen && (
+        <PoolModal
+          draft={poolDraft}
+          setDraft={setPoolDraft}
+          editing={Boolean(poolEditingId)}
+          onSubmit={savePoolItem}
+          onClose={() => setPoolModalOpen(false)}
+          onDelete={deletePoolItem}
         />
       )}
 
@@ -472,6 +777,79 @@ export default function Home() {
   );
 }
 
+function PlanPool({
+  open,
+  scope,
+  setScope,
+  items,
+  allItems,
+  loading,
+  dragging,
+  onClose,
+  onCreate,
+  onEdit,
+  onAutoSchedule,
+  onDragStart,
+  onDragEnd,
+  onDropBack,
+}: {
+  open: boolean;
+  scope: PoolScope;
+  setScope: (scope: PoolScope) => void;
+  items: PoolItem[];
+  allItems: PoolItem[];
+  loading: boolean;
+  dragging: DragPayload | null;
+  onClose: () => void;
+  onCreate: () => void;
+  onEdit: (item: PoolItem) => void;
+  onAutoSchedule: () => void;
+  onDragStart: (event: ReactDragEvent, payload: DragPayload) => void;
+  onDragEnd: () => void;
+  onDropBack: (event: ReactDragEvent) => void;
+}) {
+  const total = allItems.filter((item) => item.scope === scope).length;
+  const scheduled = allItems.filter((item) => item.scope === scope && item.scheduled).length;
+  return (
+    <>
+      {open && <button aria-label="关闭计划池" onClick={onClose} className="fixed inset-0 top-16 z-30 bg-black/20 backdrop-blur-[1px] xl:hidden" />}
+      <aside className={`fixed bottom-0 right-0 top-16 z-40 flex w-[min(336px,92vw)] flex-col border-l border-[#dedede] bg-[#f8f8f8] p-4 shadow-[-12px_0_40px_rgba(0,0,0,.08)] transition-transform duration-200 xl:z-10 xl:shadow-none ${open ? 'translate-x-0' : 'translate-x-full pointer-events-none'}`}>
+        <div className="flex items-start justify-between">
+          <div><div className="flex items-center gap-2"><h2 className="text-sm font-semibold">计划池</h2><span className="rounded-full bg-[#e9e9e9] px-2 py-0.5 text-[9px] text-[#666]">{items.length} 待安排</span></div><p className="mt-1 text-[11px] text-[#777]">先收集想做的事，再拖到日历安排</p></div>
+          <div className="flex gap-1"><button onClick={onCreate} aria-label="添加计划池事项" className="icon-button size-8"><CirclePlus className="size-3.5" /></button><button onClick={onClose} aria-label="关闭计划池" className="icon-button size-8 xl:hidden"><X className="size-3.5" /></button></div>
+        </div>
+        <div className="mt-4 grid grid-cols-2 rounded-lg border border-[#dedede] bg-[#eee] p-1 text-[11px] font-medium">
+          {(['week', 'month'] as PoolScope[]).map((value) => <button key={value} onClick={() => setScope(value)} className={`rounded-md py-1.5 transition ${scope === value ? 'bg-white text-black shadow-sm' : 'text-[#777] hover:text-black'}`}>{value === 'week' ? '本周' : '本月'}</button>)}
+        </div>
+        <div className="mt-3 flex items-center justify-between text-[10px] text-[#888]"><span>进度 {scheduled}/{total}</span><span>拖动卡片到日历</span></div>
+
+        <div className="mt-3 min-h-0 flex-1 space-y-2 overflow-y-auto pb-2">
+          {items.map((item) => (
+            <article
+              key={item.id}
+              draggable
+              onDragStart={(event) => onDragStart(event, { kind: 'pool', id: item.id })}
+              onDragEnd={onDragEnd}
+              onClick={() => onEdit(item)}
+              className={`group cursor-grab rounded-lg border border-[#dedede] bg-white p-3 shadow-[0_1px_1px_rgba(0,0,0,.03)] transition hover:-translate-y-px hover:border-[#bbb] hover:shadow-sm active:cursor-grabbing ${dragging?.kind === 'pool' && dragging.id === item.id ? 'opacity-40' : ''}`}
+            >
+              <div className="flex items-start gap-2">
+                <GripVertical className="mt-0.5 size-3.5 shrink-0 text-[#bbb] group-hover:text-[#777]" />
+                <span className={`mt-1.5 size-2 shrink-0 rounded-full ${categoryMeta[item.category].dot}`} />
+                <div className="min-w-0 flex-1"><p className="text-xs font-medium leading-5">{item.title}</p>{item.note && <p className="mt-1 line-clamp-2 text-[10px] leading-4 text-[#888]">{item.note}</p>}<div className="mt-2 flex flex-wrap items-center gap-1.5"><span className="rounded bg-[#f2f2f2] px-1.5 py-0.5 text-[9px] text-[#666]">{durationLabel(item.duration)}</span><span className={`rounded px-1.5 py-0.5 text-[9px] ${priorityMeta[item.priority].className}`}>{priorityMeta[item.priority].label}</span></div></div>
+              </div>
+            </article>
+          ))}
+          {!items.length && <div className="grid min-h-40 place-items-center rounded-lg border border-dashed border-[#d4d4d4] p-5 text-center"><div><CheckCircle2 className="mx-auto size-6 text-emerald-500" /><p className="mt-2 text-xs font-medium">都安排好了</p><p className="mt-1 text-[10px] text-[#888]">点击右上角 + 继续添加想做的事</p></div></div>}
+        </div>
+
+        <button onClick={onAutoSchedule} disabled={loading || !items.length} className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-black px-3 py-2.5 text-xs font-medium text-white transition hover:bg-[#292929] disabled:cursor-not-allowed disabled:opacity-40">{loading ? <LoaderCircle className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}{loading ? 'DeepSeek 排期中' : 'AI 自动排期'}</button>
+        <div onDragOver={(event) => { if (dragging?.kind === 'plan') { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; } }} onDrop={onDropBack} className={`mt-3 rounded-lg border border-dashed p-3 text-center text-[10px] leading-5 transition ${dragging?.kind === 'plan' ? 'border-violet-500 bg-violet-50 text-violet-700' : 'border-[#c8c8c8] text-[#888]'}`}>把日历计划拖到这里<br />取消排期并放回计划池</div>
+      </aside>
+    </>
+  );
+}
+
 function emptyDraft(date: Date): PlanDraft {
   return {
     title: '',
@@ -481,6 +859,10 @@ function emptyDraft(date: Date): PlanDraft {
     category: 'work',
     note: '',
   };
+}
+
+function emptyPoolDraft(scope: PoolScope): PoolDraft {
+  return { title: '', scope, duration: 60, priority: 'medium', category: 'work', note: '' };
 }
 
 function Sidebar({
@@ -612,7 +994,7 @@ function PlannerToolbar({
   );
 }
 
-function MonthView({ anchorDate, today, plans, onCreate, onEdit }: { anchorDate: Date; today: Date; plans: Plan[]; onCreate: (date: Date) => void; onEdit: (plan: Plan) => void }) {
+function MonthView({ anchorDate, today, plans, onCreate, onEdit, onDrop, onDragStart, onDragEnd, dropTarget, setDropTarget }: { anchorDate: Date; today: Date; plans: Plan[]; onCreate: (date: Date) => void; onEdit: (plan: Plan) => void } & CalendarDragProps) {
   const first = new Date(anchorDate.getFullYear(), anchorDate.getMonth(), 1);
   const gridStart = startOfWeek(first);
   const days = Array.from({ length: 42 }, (_, index) => addDays(gridStart, index));
@@ -625,15 +1007,22 @@ function MonthView({ anchorDate, today, plans, onCreate, onEdit }: { anchorDate:
         {days.map((day) => {
           const dayPlans = plans.filter((plan) => plan.date === toISO(day)).sort((a, b) => a.startTime.localeCompare(b.startTime));
           const outside = day.getMonth() !== anchorDate.getMonth();
+          const targetId = `month-${toISO(day)}`;
           return (
-            <div key={toISO(day)} onDoubleClick={() => onCreate(day)} className={`group min-h-[132px] border-b border-r border-[#e7e7e7] p-2 last:border-r-0 ${outside ? 'bg-[#fafafa] text-[#aaa]' : 'bg-white'} ${isSameDay(day, today) ? 'bg-violet-50/30' : ''}`}>
+            <div
+              key={toISO(day)}
+              onDoubleClick={() => onCreate(day)}
+              onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; setDropTarget(targetId); }}
+              onDrop={(event) => onDrop(event, day)}
+              className={`group min-h-[132px] border-b border-r border-[#e7e7e7] p-2 last:border-r-0 ${outside ? 'bg-[#fafafa] text-[#aaa]' : 'bg-white'} ${isSameDay(day, today) ? 'bg-violet-50/30' : ''} ${dropTarget === targetId ? 'calendar-drop-active' : ''}`}
+            >
               <div className="mb-2 flex items-center justify-between">
                 <span className={`grid size-7 place-items-center rounded-full text-xs font-semibold ${isSameDay(day, today) ? 'bg-black text-white' : ''}`}>{day.getDate()}</span>
                 <button onClick={() => onCreate(day)} aria-label={`${formatChineseDate(day)}新建计划`} className="grid size-6 place-items-center rounded-md text-[#888] opacity-0 hover:bg-[#eee] group-hover:opacity-100"><CirclePlus className="size-3.5" /></button>
               </div>
               <div className="space-y-1">
                 {dayPlans.slice(0, 3).map((plan) => (
-                  <button key={plan.id} onClick={() => onEdit(plan)} className={`block w-full truncate rounded px-1.5 py-1 text-left text-[10px] font-medium ${categoryMeta[plan.category].card}`}>
+                  <button key={plan.id} draggable onDragStart={(event) => onDragStart(event, { kind: 'plan', id: plan.id })} onDragEnd={onDragEnd} onClick={() => onEdit(plan)} className={`block w-full cursor-grab truncate rounded px-1.5 py-1 text-left text-[10px] font-medium active:cursor-grabbing ${categoryMeta[plan.category].card}`}>
                     <span className="mr-1 opacity-60">{plan.startTime}</span>{plan.title}
                   </button>
                 ))}
@@ -647,7 +1036,7 @@ function MonthView({ anchorDate, today, plans, onCreate, onEdit }: { anchorDate:
   );
 }
 
-function WeekView({ days, today, plans, onCreate, onEdit }: { days: Date[]; today: Date; plans: Plan[]; onCreate: (date: Date, time?: string) => void; onEdit: (plan: Plan) => void }) {
+function WeekView({ days, today, plans, onCreate, onEdit, onDrop, onDragStart, onDragEnd, dropTarget, setDropTarget }: { days: Date[]; today: Date; plans: Plan[]; onCreate: (date: Date, time?: string) => void; onEdit: (plan: Plan) => void } & CalendarDragProps) {
   return (
     <div className="overflow-auto rounded-xl border border-[#dedede] bg-white shadow-[0_1px_2px_rgba(0,0,0,.04)]">
       <div className="grid min-w-[920px] grid-cols-[56px_repeat(7,minmax(122px,1fr))] border-b border-[#dedede] bg-[#fafafa]">
@@ -665,13 +1054,20 @@ function WeekView({ days, today, plans, onCreate, onEdit }: { days: Date[]; toda
         </div>
         {days.map((day) => {
           const dayPlans = plans.filter((plan) => plan.date === toISO(day));
+          const targetId = `week-${toISO(day)}`;
           return (
-            <div key={toISO(day)} className={`relative border-l border-[#e6e6e6] ${isSameDay(day, today) ? 'bg-violet-50/30' : ''}`} onDoubleClick={(event) => {
-              const rect = event.currentTarget.getBoundingClientRect();
-              const rawHour = 8 + Math.floor((event.clientY - rect.top) / 60);
-              openCreateAt(onCreate, day, rawHour);
-            }}>
-              {dayPlans.map((plan) => <TimelinePlan key={plan.id} plan={plan} onEdit={onEdit} />)}
+            <div
+              key={toISO(day)}
+              className={`relative border-l border-[#e6e6e6] ${isSameDay(day, today) ? 'bg-violet-50/30' : ''} ${dropTarget === targetId ? 'calendar-drop-active' : ''}`}
+              onDoubleClick={(event) => {
+                const rect = event.currentTarget.getBoundingClientRect();
+                const rawHour = 8 + Math.floor((event.clientY - rect.top) / 60);
+                openCreateAt(onCreate, day, rawHour);
+              }}
+              onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; setDropTarget(targetId); }}
+              onDrop={(event) => onDrop(event, day, dropTimeFromPointer(event, event.currentTarget))}
+            >
+              {dayPlans.map((plan) => <TimelinePlan key={plan.id} plan={plan} onEdit={onEdit} onDragStart={onDragStart} onDragEnd={onDragEnd} />)}
             </div>
           );
         })}
@@ -680,7 +1076,7 @@ function WeekView({ days, today, plans, onCreate, onEdit }: { days: Date[]; toda
   );
 }
 
-function DayView({ day, today, plans, onCreate, onEdit }: { day: Date; today: Date; plans: Plan[]; onCreate: (date: Date, time?: string) => void; onEdit: (plan: Plan) => void }) {
+function DayView({ day, today, plans, onCreate, onEdit, onDrop, onDragStart, onDragEnd, dropTarget, setDropTarget }: { day: Date; today: Date; plans: Plan[]; onCreate: (date: Date, time?: string) => void; onEdit: (plan: Plan) => void } & CalendarDragProps) {
   const dayPlans = plans.filter((plan) => plan.date === toISO(day));
   return (
     <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_280px]">
@@ -691,11 +1087,16 @@ function DayView({ day, today, plans, onCreate, onEdit }: { day: Date; today: Da
         </div>
         <div className="relative grid h-[780px] grid-cols-[64px_1fr] bg-[linear-gradient(to_bottom,transparent_59px,#ececec_60px)] bg-[length:100%_60px]">
           <div className="relative">{timelineHours.map((hour, index) => <span key={hour} className="absolute right-3 -translate-y-1/2 text-[10px] text-[#999]" style={{ top: index * 60 }}>{pad(hour)}:00</span>)}</div>
-          <div className="relative border-l border-[#e6e6e6]" onDoubleClick={(event) => {
-            const rect = event.currentTarget.getBoundingClientRect();
-            openCreateAt(onCreate, day, 8 + Math.floor((event.clientY - rect.top) / 60));
-          }}>
-            {dayPlans.map((plan) => <TimelinePlan key={plan.id} plan={plan} onEdit={onEdit} wide />)}
+          <div
+            className={`relative border-l border-[#e6e6e6] ${dropTarget === `day-${toISO(day)}` ? 'calendar-drop-active' : ''}`}
+            onDoubleClick={(event) => {
+              const rect = event.currentTarget.getBoundingClientRect();
+              openCreateAt(onCreate, day, 8 + Math.floor((event.clientY - rect.top) / 60));
+            }}
+            onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; setDropTarget(`day-${toISO(day)}`); }}
+            onDrop={(event) => onDrop(event, day, dropTimeFromPointer(event, event.currentTarget))}
+          >
+            {dayPlans.map((plan) => <TimelinePlan key={plan.id} plan={plan} onEdit={onEdit} onDragStart={onDragStart} onDragEnd={onDragEnd} wide />)}
           </div>
         </div>
       </div>
@@ -721,14 +1122,20 @@ function openCreateAt(onCreate: (date: Date, time?: string) => void, day: Date, 
   onCreate(day, `${pad(safeHour)}:00`);
 }
 
-function TimelinePlan({ plan, onEdit, wide = false }: { plan: Plan; onEdit: (plan: Plan) => void; wide?: boolean }) {
+function dropTimeFromPointer(event: ReactDragEvent, element: HTMLElement) {
+  const offset = Math.max(0, event.clientY - element.getBoundingClientRect().top);
+  const total = Math.min(20 * 60 + 45, 8 * 60 + Math.round(offset / 15) * 15);
+  return `${pad(Math.floor(total / 60))}:${pad(total % 60)}`;
+}
+
+function TimelinePlan({ plan, onEdit, onDragStart, onDragEnd, wide = false }: { plan: Plan; onEdit: (plan: Plan) => void; onDragStart: (event: ReactDragEvent, payload: DragPayload) => void; onDragEnd: () => void; wide?: boolean }) {
   const start = minutes(plan.startTime);
   const end = Math.max(start + 30, minutes(plan.endTime));
   const top = ((start - 8 * 60) / 60) * 60;
   const height = Math.max(36, ((end - start) / 60) * 60 - 3);
   if (top < -height || top > 780) return null;
   return (
-    <button onClick={() => onEdit(plan)} className={`absolute left-1.5 right-1.5 z-10 overflow-hidden rounded-md border p-2 text-left shadow-sm transition hover:-translate-y-px hover:shadow-md ${categoryMeta[plan.category].card} ${wide ? 'max-w-2xl' : ''}`} style={{ top: Math.max(0, top), height }}>
+    <button draggable onDragStart={(event) => onDragStart(event, { kind: 'plan', id: plan.id })} onDragEnd={onDragEnd} onClick={() => onEdit(plan)} className={`absolute left-1.5 right-1.5 z-10 cursor-grab overflow-hidden rounded-md border p-2 text-left shadow-sm transition hover:-translate-y-px hover:shadow-md active:cursor-grabbing ${categoryMeta[plan.category].card} ${wide ? 'max-w-2xl' : ''}`} style={{ top: Math.max(0, top), height }}>
       <p className="truncate text-[11px] font-semibold">{plan.title}</p>
       {height > 42 && <p className="mt-1 flex items-center gap-1 text-[9px] opacity-70"><Clock3 className="size-2.5" />{plan.startTime}–{plan.endTime}</p>}
     </button>
@@ -777,6 +1184,27 @@ function PlanModal({ draft, setDraft, editing, completed, onSubmit, onClose, onD
           {editing && <button type="button" onClick={onToggleCompleted} className="rounded-lg border border-[#d8d8d8] px-3 py-2 text-xs font-medium hover:bg-[#f6f6f6]">{completed ? '恢复未完成' : '标记完成'}</button>}
           <div className="ml-auto flex gap-2"><button type="button" onClick={onClose} className="rounded-lg border border-[#d8d8d8] px-4 py-2 text-xs font-medium hover:bg-[#f6f6f6]">取消</button><button className="rounded-lg bg-black px-4 py-2 text-xs font-medium text-white hover:bg-[#292929]">{editing ? '保存更改' : '添加计划'}</button></div>
         </div>
+      </form>
+    </div>
+  );
+}
+
+function PoolModal({ draft, setDraft, editing, onSubmit, onClose, onDelete }: { draft: PoolDraft; setDraft: (draft: PoolDraft) => void; editing: boolean; onSubmit: (event: FormEvent) => void; onClose: () => void; onDelete: () => void }) {
+  return (
+    <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <form onSubmit={onSubmit} className="modal-card max-w-[520px]">
+        <div className="flex items-center justify-between border-b border-[#e7e7e7] px-5 py-4"><div><h2 className="text-base font-semibold">{editing ? '编辑计划池事项' : '放入计划池'}</h2><p className="mt-0.5 text-[11px] text-[#777]">先记录意图，具体时间稍后再安排</p></div><button type="button" onClick={onClose} className="icon-button border-0"><X className="size-4" /></button></div>
+        <div className="space-y-4 p-5">
+          <label className="field-label">想做的事情<input autoFocus required value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} className="field-input" placeholder="例如：准备产品发布材料" /></label>
+          <div className="grid grid-cols-2 gap-3">
+            <label className="field-label">计划范围<select value={draft.scope} onChange={(event) => setDraft({ ...draft, scope: event.target.value as PoolScope })} className="field-input"><option value="week">本周</option><option value="month">本月</option></select></label>
+            <label className="field-label">预计用时<select value={draft.duration} onChange={(event) => setDraft({ ...draft, duration: Number(event.target.value) })} className="field-input"><option value={30}>30 分钟</option><option value={45}>45 分钟</option><option value={60}>1 小时</option><option value={90}>1.5 小时</option><option value={120}>2 小时</option><option value={180}>3 小时</option><option value={240}>4 小时</option></select></label>
+            <label className="field-label">优先级<select value={draft.priority} onChange={(event) => setDraft({ ...draft, priority: event.target.value as Priority })} className="field-input"><option value="high">高优先</option><option value="medium">中优先</option><option value="low">低优先</option></select></label>
+            <label className="field-label">分类<select value={draft.category} onChange={(event) => setDraft({ ...draft, category: event.target.value as Category })} className="field-input">{(Object.keys(categoryMeta) as Category[]).map((category) => <option key={category} value={category}>{categoryMeta[category].label}</option>)}</select></label>
+          </div>
+          <label className="field-label">完成标准 / 备注<textarea value={draft.note} onChange={(event) => setDraft({ ...draft, note: event.target.value })} className="field-input min-h-24 resize-none" placeholder="AI 会参考这里的信息自动排期（可选）" /></label>
+        </div>
+        <div className="flex items-center border-t border-[#e7e7e7] px-5 py-4">{editing && <button type="button" onClick={onDelete} className="flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium text-red-600 hover:bg-red-50"><Trash2 className="size-3.5" />删除</button>}<div className="ml-auto flex gap-2"><button type="button" onClick={onClose} className="rounded-lg border border-[#d8d8d8] px-4 py-2 text-xs font-medium">取消</button><button className="rounded-lg bg-black px-4 py-2 text-xs font-medium text-white">{editing ? '保存更改' : '放入计划池'}</button></div></div>
       </form>
     </div>
   );
