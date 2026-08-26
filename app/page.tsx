@@ -1462,7 +1462,7 @@ function WeekView({ days, today, plans, categoryMeta, timeline, onCreate, onEdit
           {timelineHours.map((hour, index) => <span key={hour} className="absolute right-3 -translate-y-1/2 text-[10px] text-[#999]" style={{ top: Math.min(index * timeline.hourHeight, timelineHeight - 1) }}>{pad(hour)}:00</span>)}
         </div>
         {days.map((day) => {
-          const dayPlans = plans.filter((plan) => plan.date === toISO(day));
+          const dayPlans = layoutTimelinePlans(plans.filter((plan) => plan.date === toISO(day)));
           const targetId = `week-${toISO(day)}`;
           return (
             <div
@@ -1474,7 +1474,7 @@ function WeekView({ days, today, plans, categoryMeta, timeline, onCreate, onEdit
               onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; setDropTarget(targetId); }}
               onDrop={(event) => onDrop(event, day, timeFromPointer(event, event.currentTarget, timeline))}
             >
-              {dayPlans.map((plan) => <TimelinePlan key={plan.id} plan={plan} categoryMeta={categoryMeta} timeline={timeline} onEdit={onEdit} onDragStart={onDragStart} onDragEnd={onDragEnd} />)}
+              {dayPlans.map((placement) => <TimelinePlan key={placement.plan.id} placement={placement} categoryMeta={categoryMeta} timeline={timeline} onEdit={onEdit} onDragStart={onDragStart} onDragEnd={onDragEnd} />)}
             </div>
           );
         })}
@@ -1485,11 +1485,12 @@ function WeekView({ days, today, plans, categoryMeta, timeline, onCreate, onEdit
 
 function DayView({ day, today, plans, categoryMeta, timeline, onCreate, onEdit, onDrop, onDragStart, onDragEnd, dropTarget, setDropTarget }: { day: Date; today: Date; plans: Plan[]; categoryMeta: CategoryDisplayMap; timeline: TimelineSettings; onCreate: (date: Date, time?: string) => void; onEdit: (plan: Plan) => void } & CalendarDragProps) {
   const dayPlans = plans.filter((plan) => plan.date === toISO(day));
+  const dayPlacements = layoutTimelinePlans(dayPlans);
   const timelineHours = Array.from({ length: timeline.endHour - timeline.startHour + 1 }, (_, index) => timeline.startHour + index);
   const timelineHeight = (timeline.endHour - timeline.startHour) * timeline.hourHeight;
   const timelineStyle = { height: timelineHeight, '--hour-height': `${timeline.hourHeight}px` } as CSSProperties;
   return (
-    <div className="day-view-grid grid gap-4 xl:grid-cols-[minmax(0,1fr)_280px]">
+    <div className="day-view-grid grid gap-4 2xl:grid-cols-[minmax(0,1fr)_280px]">
       <div className="calendar-export-card overflow-hidden rounded-xl border border-[#dedede] bg-white shadow-[0_1px_2px_rgba(0,0,0,.04)]">
         <div className="flex items-center justify-between border-b border-[#dedede] bg-[#fafafa] px-5 py-4">
           <div className="flex items-center gap-3"><span className={`grid size-9 place-items-center rounded-full text-sm font-semibold ${isSameDay(day, today) ? 'bg-black text-white' : 'bg-[#ededed]'}`}>{day.getDate()}</span><div><p className="text-sm font-semibold">{weekdayNames[(day.getDay() + 6) % 7]}</p><p className="text-[11px] text-[#777]">{formatChineseDate(day)}</p></div></div>
@@ -1505,7 +1506,7 @@ function DayView({ day, today, plans, categoryMeta, timeline, onCreate, onEdit, 
             onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; setDropTarget(`day-${toISO(day)}`); }}
             onDrop={(event) => onDrop(event, day, timeFromPointer(event, event.currentTarget, timeline))}
           >
-            {dayPlans.map((plan) => <TimelinePlan key={plan.id} plan={plan} categoryMeta={categoryMeta} timeline={timeline} onEdit={onEdit} onDragStart={onDragStart} onDragEnd={onDragEnd} wide />)}
+            {dayPlacements.map((placement) => <TimelinePlan key={placement.plan.id} placement={placement} categoryMeta={categoryMeta} timeline={timeline} onEdit={onEdit} onDragStart={onDragStart} onDragEnd={onDragEnd} wide />)}
           </div>
         </div>
       </div>
@@ -1533,7 +1534,50 @@ function timeFromPointer(event: { clientY: number }, element: HTMLElement, timel
   return `${pad(Math.floor(total / 60))}:${pad(total % 60)}`;
 }
 
-function TimelinePlan({ plan, categoryMeta, timeline, onEdit, onDragStart, onDragEnd, wide = false }: { plan: Plan; categoryMeta: CategoryDisplayMap; timeline: TimelineSettings; onEdit: (plan: Plan) => void; onDragStart: (event: ReactDragEvent, payload: DragPayload) => void; onDragEnd: () => void; wide?: boolean }) {
+type TimelinePlanPlacement = {
+  plan: Plan;
+  column: number;
+  columnCount: number;
+};
+
+function layoutTimelinePlans(plans: Plan[]): TimelinePlanPlacement[] {
+  const sorted = [...plans]
+    .map((plan) => ({ plan, start: minutes(plan.startTime), end: Math.max(minutes(plan.startTime) + 30, minutes(plan.endTime)) }))
+    .sort((a, b) => a.start - b.start || a.end - b.end || a.plan.id.localeCompare(b.plan.id));
+  const placements: TimelinePlanPlacement[] = [];
+  let cluster: typeof sorted = [];
+  let clusterEnd = -1;
+
+  const flushCluster = () => {
+    if (!cluster.length) return;
+    const laneEnds: number[] = [];
+    const assigned = cluster.map((item) => {
+      let column = laneEnds.findIndex((end) => end <= item.start);
+      if (column === -1) {
+        column = laneEnds.length;
+        laneEnds.push(item.end);
+      } else {
+        laneEnds[column] = item.end;
+      }
+      return { plan: item.plan, column };
+    });
+    const columnCount = laneEnds.length;
+    placements.push(...assigned.map((item) => ({ ...item, columnCount })));
+    cluster = [];
+    clusterEnd = -1;
+  };
+
+  sorted.forEach((item) => {
+    if (cluster.length && item.start >= clusterEnd) flushCluster();
+    cluster.push(item);
+    clusterEnd = Math.max(clusterEnd, item.end);
+  });
+  flushCluster();
+  return placements;
+}
+
+function TimelinePlan({ placement, categoryMeta, timeline, onEdit, onDragStart, onDragEnd, wide = false }: { placement: TimelinePlanPlacement; categoryMeta: CategoryDisplayMap; timeline: TimelineSettings; onEdit: (plan: Plan) => void; onDragStart: (event: ReactDragEvent, payload: DragPayload) => void; onDragEnd: () => void; wide?: boolean }) {
+  const { plan, column, columnCount } = placement;
   const start = minutes(plan.startTime);
   const end = Math.max(start + 30, minutes(plan.endTime));
   const rangeStart = timeline.startHour * 60;
@@ -1542,8 +1586,24 @@ function TimelinePlan({ plan, categoryMeta, timeline, onEdit, onDragStart, onDra
   const top = ((Math.max(start, rangeStart) - rangeStart) / 60) * timeline.hourHeight;
   const bottom = ((Math.min(end, rangeEnd) - rangeStart) / 60) * timeline.hourHeight;
   const height = Math.max(24, bottom - top - 3);
+  const columnWidth = 100 / columnCount;
+  const horizontalStyle = columnCount === 1
+    ? { left: '6px', width: 'calc(100% - 12px)' }
+    : { left: `calc(${column * columnWidth}% + ${column === 0 ? 6 : 2}px)`, width: `calc(${columnWidth}% - ${column === 0 ? 8 : 4}px)` };
   return (
-    <button draggable onDragStart={(event) => onDragStart(event, { kind: 'plan', id: plan.id })} onDragEnd={onDragEnd} onClick={() => onEdit(plan)} className={`absolute left-1.5 right-1.5 z-10 cursor-grab overflow-hidden rounded-md border p-2 text-left shadow-sm transition hover:-translate-y-px hover:shadow-md active:cursor-grabbing ${categoryDisplay(categoryMeta, plan.category).card} ${plan.completed ? 'plan-completed' : ''} ${wide ? 'max-w-2xl' : ''}`} style={{ top: Math.max(0, top), height }}>
+    <button
+      draggable
+      data-plan-id={plan.id}
+      data-overlap-column={column + 1}
+      data-overlap-columns={columnCount}
+      title={`${plan.title} · ${plan.startTime}–${plan.endTime}`}
+      onDragStart={(event) => onDragStart(event, { kind: 'plan', id: plan.id })}
+      onDragEnd={onDragEnd}
+      onClick={() => onEdit(plan)}
+      onDoubleClick={(event) => event.stopPropagation()}
+      className={`absolute z-10 min-w-0 cursor-grab overflow-hidden rounded-md border p-2 text-left shadow-sm transition hover:z-30 hover:-translate-y-px hover:shadow-md focus:z-30 active:cursor-grabbing ${categoryDisplay(categoryMeta, plan.category).card} ${plan.completed ? 'plan-completed' : ''}`}
+      style={{ top: Math.max(0, top), height, ...horizontalStyle, maxWidth: wide && columnCount === 1 ? '42rem' : undefined }}
+    >
       <p className="truncate text-[11px] font-semibold">{plan.title}</p>
       {height > 42 && <p className="mt-1 flex items-center gap-1 text-[9px] opacity-70"><Clock3 className="size-2.5" />{plan.startTime}–{plan.endTime}</p>}
     </button>
