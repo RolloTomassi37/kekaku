@@ -32,6 +32,7 @@ type Source = 'manual' | 'ai' | 'quick';
 type PoolScope = 'week' | 'month';
 type Priority = 'high' | 'medium' | 'low';
 type Theme = 'light' | 'dark';
+type TimelineSettings = { startHour: number; endHour: number; hourHeight: number };
 
 type Plan = {
   id: string;
@@ -79,10 +80,11 @@ const STORAGE_KEY = 'kekaku-plans-v1';
 const POOL_STORAGE_KEY = 'kekaku-plan-pool-v1';
 const THEME_STORAGE_KEY = 'kekaku-theme-v1';
 const CALENDAR_WIDTH_STORAGE_KEY = 'kekaku-calendar-width-v1';
+const CALENDAR_TIMELINE_STORAGE_KEY = 'kekaku-calendar-timeline-v1';
 const DRAG_MIME = 'application/x-kekaku-plan';
 const weekdayNames = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
 const monthWeekdays = ['一', '二', '三', '四', '五', '六', '日'];
-const timelineHours = Array.from({ length: 13 }, (_, index) => index + 8);
+const DEFAULT_TIMELINE: TimelineSettings = { startHour: 6, endHour: 23, hourHeight: 48 };
 
 const categoryMeta: Record<Category, { label: string; card: string; dot: string }> = {
   work: { label: '工作', card: 'plan-work', dot: 'bg-violet-500' },
@@ -100,6 +102,16 @@ const priorityMeta: Record<Priority, { label: string; className: string }> = {
 
 function pad(value: number) {
   return String(value).padStart(2, '0');
+}
+
+function normalizeTimelineSettings(value: Partial<TimelineSettings>): TimelineSettings {
+  const rawStart = Number(value.startHour);
+  const rawEnd = Number(value.endHour);
+  const rawHeight = Number(value.hourHeight);
+  const startHour = Number.isFinite(rawStart) ? Math.max(0, Math.min(22, Math.round(rawStart))) : DEFAULT_TIMELINE.startHour;
+  const endHour = Number.isFinite(rawEnd) ? Math.max(startHour + 2, Math.min(24, Math.round(rawEnd))) : DEFAULT_TIMELINE.endHour;
+  const hourHeight = Number.isFinite(rawHeight) ? Math.max(40, Math.min(72, Math.round(rawHeight / 4) * 4)) : DEFAULT_TIMELINE.hourHeight;
+  return { startHour, endHour, hourHeight };
 }
 
 function toISO(date: Date) {
@@ -324,6 +336,7 @@ export default function Home() {
   const [poolOpen, setPoolOpen] = useState(true);
   const [theme, setTheme] = useState<Theme>('light');
   const [calendarWidth, setCalendarWidth] = useState(100);
+  const [timelineSettings, setTimelineSettings] = useState<TimelineSettings>(DEFAULT_TIMELINE);
   const [hydrated, setHydrated] = useState(false);
   const [planModalOpen, setPlanModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -365,6 +378,15 @@ export default function Home() {
   useEffect(() => {
     const saved = Number(localStorage.getItem(CALENDAR_WIDTH_STORAGE_KEY));
     if (Number.isFinite(saved) && saved >= 70 && saved <= 100) setCalendarWidth(saved);
+  }, []);
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(CALENDAR_TIMELINE_STORAGE_KEY);
+      if (saved) setTimelineSettings(normalizeTimelineSettings(JSON.parse(saved)));
+    } catch {
+      setTimelineSettings(DEFAULT_TIMELINE);
+    }
   }, []);
   /* eslint-enable react-hooks/set-state-in-effect */
 
@@ -659,6 +681,14 @@ export default function Home() {
     localStorage.setItem(CALENDAR_WIDTH_STORAGE_KEY, String(next));
   };
 
+  const updateTimelineSettings = (patch: Partial<TimelineSettings>) => {
+    setTimelineSettings((current) => {
+      const next = normalizeTimelineSettings({ ...current, ...patch });
+      localStorage.setItem(CALENDAR_TIMELINE_STORAGE_KEY, JSON.stringify(next));
+      return next;
+    });
+  };
+
   const title = section === 'calendar' ? '我的计划' : section === 'inbox' ? '快捷收集箱' : '已完成';
 
   return (
@@ -685,7 +715,7 @@ export default function Home() {
             </button>
             {section === 'calendar' && (
               <>
-              <CalendarWidthControl value={calendarWidth} onChange={updateCalendarWidth} />
+              <CalendarLayoutControl width={calendarWidth} timeline={timelineSettings} onWidthChange={updateCalendarWidth} onTimelineChange={updateTimelineSettings} />
               <button onClick={() => setPoolOpen((open) => !open)} aria-pressed={poolOpen} className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-2 text-xs font-medium transition ${poolOpen ? 'border-black bg-black text-white' : 'border-[#dedede] bg-white hover:bg-[#f6f6f6]'}`}>
                 <ListTodo className="size-3.5" /><span className="hidden sm:inline">计划池</span><span className="rounded-full bg-white/15 px-1.5 text-[9px]">{visiblePoolItems.length}</span>
               </button>
@@ -733,6 +763,7 @@ export default function Home() {
                   days={weekDays}
                   today={today}
                   plans={plans}
+                  timeline={timelineSettings}
                   onCreate={openCreate}
                   onEdit={openEdit}
                   onDrop={dropOnCalendar}
@@ -747,6 +778,7 @@ export default function Home() {
                   day={anchorDate}
                   today={today}
                   plans={plans}
+                  timeline={timelineSettings}
                   onCreate={openCreate}
                   onEdit={openEdit}
                   onDrop={dropOnCalendar}
@@ -990,48 +1022,74 @@ function ViewSwitch({ value, onChange }: { value: ViewMode; onChange: (value: Vi
   );
 }
 
-function CalendarWidthControl({ value, onChange }: { value: number; onChange: (value: number) => void }) {
+function CalendarLayoutControl({ width, timeline, onWidthChange, onTimelineChange }: { width: number; timeline: TimelineSettings; onWidthChange: (value: number) => void; onTimelineChange: (patch: Partial<TimelineSettings>) => void }) {
   const [open, setOpen] = useState(false);
-  const presets = [
+  const widthPresets = [
     { value: 75, label: '紧凑' },
     { value: 90, label: '舒适' },
     { value: 100, label: '铺满' },
+  ];
+  const timePresets = [
+    { startHour: 8, endHour: 20, label: '08–20' },
+    { startHour: 6, endHour: 23, label: '06–23' },
+    { startHour: 0, endHour: 24, label: '全天' },
   ];
   return (
     <div className="relative">
       <button
         onClick={() => setOpen((current) => !current)}
         aria-expanded={open}
-        aria-controls="calendar-width-panel"
-        title="调整日历占用宽度"
+        aria-controls="calendar-layout-panel"
+        title="调整日历宽度、时段和高度"
         className="flex h-[34px] items-center gap-1.5 rounded-lg border border-[#dedede] bg-white px-2.5 text-xs font-medium transition hover:bg-[#f6f6f6]"
       >
         <SlidersHorizontal className="size-3.5" />
-        <span className="hidden lg:inline">宽度 {value}%</span>
+        <span className="hidden lg:inline">布局</span>
       </button>
       {open && (
-        <div id="calendar-width-panel" className="absolute right-0 top-11 z-50 w-64 rounded-xl border border-[#dedede] bg-white p-4 shadow-xl">
+        <div id="calendar-layout-panel" className="absolute right-0 top-11 z-50 w-72 rounded-xl border border-[#dedede] bg-white p-4 shadow-xl">
           <div className="flex items-center justify-between">
-            <div><p className="text-xs font-semibold">日历占用宽度</p><p className="mt-1 text-[10px] text-[#777]">仅在大屏生效，并自动记住选择</p></div>
-            <span className="rounded-md bg-[#f2f2f2] px-2 py-1 text-xs font-semibold tabular-nums">{value}%</span>
+            <div><p className="text-xs font-semibold">日历布局</p><p className="mt-1 text-[10px] text-[#777]">设置会自动保存在当前设备</p></div>
+            <span className="rounded-md bg-[#f2f2f2] px-2 py-1 text-xs font-semibold tabular-nums">{pad(timeline.startHour)}–{pad(timeline.endHour)}</span>
           </div>
+          <div className="mt-4 flex items-center justify-between"><label className="text-[11px] font-medium" htmlFor="calendar-width-range">占用宽度</label><span className="text-[10px] tabular-nums text-[#777]">{width}%</span></div>
           <input
+            id="calendar-width-range"
             type="range"
             min="70"
             max="100"
             step="5"
-            value={value}
-            onChange={(event) => onChange(Number(event.target.value))}
-            aria-label="日历占用宽度百分比"
-            className="calendar-width-range mt-4 w-full"
+            value={width}
+            onChange={(event) => onWidthChange(Number(event.target.value))}
+            className="calendar-range mt-2 w-full"
           />
-          <div className="mt-3 grid grid-cols-3 gap-1.5">
-            {presets.map((preset) => (
-              <button key={preset.value} onClick={() => onChange(preset.value)} className={`rounded-md border px-2 py-1.5 text-[10px] font-medium transition ${value === preset.value ? 'border-black bg-black text-white' : 'border-[#dedede] hover:bg-[#f6f6f6]'}`}>
+          <div className="mt-2 grid grid-cols-3 gap-1.5">
+            {widthPresets.map((preset) => (
+              <button key={preset.value} onClick={() => onWidthChange(preset.value)} className={`rounded-md border px-2 py-1.5 text-[10px] font-medium transition ${width === preset.value ? 'border-black bg-black text-white' : 'border-[#dedede] hover:bg-[#f6f6f6]'}`}>
                 {preset.label} {preset.value}%
               </button>
             ))}
           </div>
+          <div className="my-4 border-t border-[#ececec]" />
+          <div className="flex items-center justify-between"><p className="text-[11px] font-medium">显示时段</p><span className="text-[10px] text-[#777]">周 / 日视图</span></div>
+          <div className="mt-2 grid grid-cols-[1fr_auto_1fr] items-center gap-2">
+            <select value={timeline.startHour} onChange={(event) => onTimelineChange({ startHour: Number(event.target.value) })} aria-label="日历开始小时" className="field-input py-2 text-center tabular-nums">
+              {Array.from({ length: timeline.endHour - 1 }, (_, hour) => hour).map((hour) => <option key={hour} value={hour}>{pad(hour)}:00</option>)}
+            </select>
+            <span className="text-xs text-[#888]">至</span>
+            <select value={timeline.endHour} onChange={(event) => onTimelineChange({ endHour: Number(event.target.value) })} aria-label="日历结束小时" className="field-input py-2 text-center tabular-nums">
+              {Array.from({ length: 24 - timeline.startHour - 1 }, (_, index) => timeline.startHour + index + 2).map((hour) => <option key={hour} value={hour}>{pad(hour)}:00</option>)}
+            </select>
+          </div>
+          <div className="mt-2 grid grid-cols-3 gap-1.5">
+            {timePresets.map((preset) => {
+              const active = timeline.startHour === preset.startHour && timeline.endHour === preset.endHour;
+              return <button key={preset.label} onClick={() => onTimelineChange({ startHour: preset.startHour, endHour: preset.endHour })} className={`rounded-md border px-2 py-1.5 text-[10px] font-medium transition ${active ? 'border-black bg-black text-white' : 'border-[#dedede] hover:bg-[#f6f6f6]'}`}>{preset.label}</button>;
+            })}
+          </div>
+          <div className="mt-4 flex items-center justify-between"><label className="text-[11px] font-medium" htmlFor="calendar-height-range">每小时高度</label><span className="text-[10px] tabular-nums text-[#777]">{timeline.hourHeight}px</span></div>
+          <input id="calendar-height-range" type="range" min="40" max="72" step="4" value={timeline.hourHeight} onChange={(event) => onTimelineChange({ hourHeight: Number(event.target.value) })} className="calendar-range mt-2 w-full" />
+          <div className="mt-1 flex justify-between text-[9px] text-[#888]"><span>紧凑</span><span>宽松</span></div>
         </div>
       )}
     </div>
@@ -1133,7 +1191,10 @@ function MonthView({ anchorDate, today, plans, onCreate, onEdit, onDrop, onDragS
   );
 }
 
-function WeekView({ days, today, plans, onCreate, onEdit, onDrop, onDragStart, onDragEnd, dropTarget, setDropTarget }: { days: Date[]; today: Date; plans: Plan[]; onCreate: (date: Date, time?: string) => void; onEdit: (plan: Plan) => void } & CalendarDragProps) {
+function WeekView({ days, today, plans, timeline, onCreate, onEdit, onDrop, onDragStart, onDragEnd, dropTarget, setDropTarget }: { days: Date[]; today: Date; plans: Plan[]; timeline: TimelineSettings; onCreate: (date: Date, time?: string) => void; onEdit: (plan: Plan) => void } & CalendarDragProps) {
+  const timelineHours = Array.from({ length: timeline.endHour - timeline.startHour + 1 }, (_, index) => timeline.startHour + index);
+  const timelineHeight = (timeline.endHour - timeline.startHour) * timeline.hourHeight;
+  const timelineStyle = { height: timelineHeight, '--hour-height': `${timeline.hourHeight}px` } as CSSProperties;
   return (
     <div className="overflow-auto rounded-xl border border-[#dedede] bg-white shadow-[0_1px_2px_rgba(0,0,0,.04)]">
       <div className="grid min-w-[920px] grid-cols-[56px_repeat(7,minmax(122px,1fr))] border-b border-[#dedede] bg-[#fafafa]">
@@ -1145,9 +1206,9 @@ function WeekView({ days, today, plans, onCreate, onEdit, onDrop, onDragStart, o
           </div>
         ))}
       </div>
-      <div className="relative grid h-[780px] min-w-[920px] grid-cols-[56px_repeat(7,minmax(122px,1fr))] bg-[linear-gradient(to_bottom,transparent_59px,#ececec_60px)] bg-[length:100%_60px]">
+      <div className="timeline-grid relative grid min-w-[920px] grid-cols-[56px_repeat(7,minmax(122px,1fr))]" style={timelineStyle}>
         <div className="relative">
-          {timelineHours.map((hour, index) => <span key={hour} className="absolute right-3 -translate-y-1/2 text-[10px] text-[#999]" style={{ top: index * 60 }}>{pad(hour)}:00</span>)}
+          {timelineHours.map((hour, index) => <span key={hour} className="absolute right-3 -translate-y-1/2 text-[10px] text-[#999]" style={{ top: Math.min(index * timeline.hourHeight, timelineHeight - 1) }}>{pad(hour)}:00</span>)}
         </div>
         {days.map((day) => {
           const dayPlans = plans.filter((plan) => plan.date === toISO(day));
@@ -1157,14 +1218,12 @@ function WeekView({ days, today, plans, onCreate, onEdit, onDrop, onDragStart, o
               key={toISO(day)}
               className={`relative border-l border-[#e6e6e6] ${isSameDay(day, today) ? 'bg-violet-50/30' : ''} ${dropTarget === targetId ? 'calendar-drop-active' : ''}`}
               onDoubleClick={(event) => {
-                const rect = event.currentTarget.getBoundingClientRect();
-                const rawHour = 8 + Math.floor((event.clientY - rect.top) / 60);
-                openCreateAt(onCreate, day, rawHour);
+                onCreate(day, timeFromPointer(event, event.currentTarget, timeline));
               }}
               onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; setDropTarget(targetId); }}
-              onDrop={(event) => onDrop(event, day, dropTimeFromPointer(event, event.currentTarget))}
+              onDrop={(event) => onDrop(event, day, timeFromPointer(event, event.currentTarget, timeline))}
             >
-              {dayPlans.map((plan) => <TimelinePlan key={plan.id} plan={plan} onEdit={onEdit} onDragStart={onDragStart} onDragEnd={onDragEnd} />)}
+              {dayPlans.map((plan) => <TimelinePlan key={plan.id} plan={plan} timeline={timeline} onEdit={onEdit} onDragStart={onDragStart} onDragEnd={onDragEnd} />)}
             </div>
           );
         })}
@@ -1173,8 +1232,11 @@ function WeekView({ days, today, plans, onCreate, onEdit, onDrop, onDragStart, o
   );
 }
 
-function DayView({ day, today, plans, onCreate, onEdit, onDrop, onDragStart, onDragEnd, dropTarget, setDropTarget }: { day: Date; today: Date; plans: Plan[]; onCreate: (date: Date, time?: string) => void; onEdit: (plan: Plan) => void } & CalendarDragProps) {
+function DayView({ day, today, plans, timeline, onCreate, onEdit, onDrop, onDragStart, onDragEnd, dropTarget, setDropTarget }: { day: Date; today: Date; plans: Plan[]; timeline: TimelineSettings; onCreate: (date: Date, time?: string) => void; onEdit: (plan: Plan) => void } & CalendarDragProps) {
   const dayPlans = plans.filter((plan) => plan.date === toISO(day));
+  const timelineHours = Array.from({ length: timeline.endHour - timeline.startHour + 1 }, (_, index) => timeline.startHour + index);
+  const timelineHeight = (timeline.endHour - timeline.startHour) * timeline.hourHeight;
+  const timelineStyle = { height: timelineHeight, '--hour-height': `${timeline.hourHeight}px` } as CSSProperties;
   return (
     <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_280px]">
       <div className="overflow-hidden rounded-xl border border-[#dedede] bg-white shadow-[0_1px_2px_rgba(0,0,0,.04)]">
@@ -1182,18 +1244,17 @@ function DayView({ day, today, plans, onCreate, onEdit, onDrop, onDragStart, onD
           <div className="flex items-center gap-3"><span className={`grid size-9 place-items-center rounded-full text-sm font-semibold ${isSameDay(day, today) ? 'bg-black text-white' : 'bg-[#ededed]'}`}>{day.getDate()}</span><div><p className="text-sm font-semibold">{weekdayNames[(day.getDay() + 6) % 7]}</p><p className="text-[11px] text-[#777]">{formatChineseDate(day)}</p></div></div>
           <button onClick={() => onCreate(day)} className="flex items-center gap-1.5 rounded-lg bg-black px-3 py-2 text-xs font-medium text-white"><CirclePlus className="size-3.5" />添加</button>
         </div>
-        <div className="relative grid h-[780px] grid-cols-[64px_1fr] bg-[linear-gradient(to_bottom,transparent_59px,#ececec_60px)] bg-[length:100%_60px]">
-          <div className="relative">{timelineHours.map((hour, index) => <span key={hour} className="absolute right-3 -translate-y-1/2 text-[10px] text-[#999]" style={{ top: index * 60 }}>{pad(hour)}:00</span>)}</div>
+        <div className="timeline-grid relative grid grid-cols-[64px_1fr]" style={timelineStyle}>
+          <div className="relative">{timelineHours.map((hour, index) => <span key={hour} className="absolute right-3 -translate-y-1/2 text-[10px] text-[#999]" style={{ top: Math.min(index * timeline.hourHeight, timelineHeight - 1) }}>{pad(hour)}:00</span>)}</div>
           <div
             className={`relative border-l border-[#e6e6e6] ${dropTarget === `day-${toISO(day)}` ? 'calendar-drop-active' : ''}`}
             onDoubleClick={(event) => {
-              const rect = event.currentTarget.getBoundingClientRect();
-              openCreateAt(onCreate, day, 8 + Math.floor((event.clientY - rect.top) / 60));
+              onCreate(day, timeFromPointer(event, event.currentTarget, timeline));
             }}
             onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; setDropTarget(`day-${toISO(day)}`); }}
-            onDrop={(event) => onDrop(event, day, dropTimeFromPointer(event, event.currentTarget))}
+            onDrop={(event) => onDrop(event, day, timeFromPointer(event, event.currentTarget, timeline))}
           >
-            {dayPlans.map((plan) => <TimelinePlan key={plan.id} plan={plan} onEdit={onEdit} onDragStart={onDragStart} onDragEnd={onDragEnd} wide />)}
+            {dayPlans.map((plan) => <TimelinePlan key={plan.id} plan={plan} timeline={timeline} onEdit={onEdit} onDragStart={onDragStart} onDragEnd={onDragEnd} wide />)}
           </div>
         </div>
       </div>
@@ -1214,23 +1275,22 @@ function DayView({ day, today, plans, onCreate, onEdit, onDrop, onDragStart, onD
   );
 }
 
-function openCreateAt(onCreate: (date: Date, time?: string) => void, day: Date, hour: number) {
-  const safeHour = Math.max(0, Math.min(23, hour));
-  onCreate(day, `${pad(safeHour)}:00`);
-}
-
-function dropTimeFromPointer(event: ReactDragEvent, element: HTMLElement) {
+function timeFromPointer(event: { clientY: number }, element: HTMLElement, timeline: TimelineSettings) {
   const offset = Math.max(0, event.clientY - element.getBoundingClientRect().top);
-  const total = Math.min(20 * 60 + 45, 8 * 60 + Math.round(offset / 15) * 15);
+  const rawMinutes = timeline.startHour * 60 + Math.round((offset / timeline.hourHeight) * 4) * 15;
+  const total = Math.max(timeline.startHour * 60, Math.min(timeline.endHour * 60 - 15, rawMinutes));
   return `${pad(Math.floor(total / 60))}:${pad(total % 60)}`;
 }
 
-function TimelinePlan({ plan, onEdit, onDragStart, onDragEnd, wide = false }: { plan: Plan; onEdit: (plan: Plan) => void; onDragStart: (event: ReactDragEvent, payload: DragPayload) => void; onDragEnd: () => void; wide?: boolean }) {
+function TimelinePlan({ plan, timeline, onEdit, onDragStart, onDragEnd, wide = false }: { plan: Plan; timeline: TimelineSettings; onEdit: (plan: Plan) => void; onDragStart: (event: ReactDragEvent, payload: DragPayload) => void; onDragEnd: () => void; wide?: boolean }) {
   const start = minutes(plan.startTime);
   const end = Math.max(start + 30, minutes(plan.endTime));
-  const top = ((start - 8 * 60) / 60) * 60;
-  const height = Math.max(36, ((end - start) / 60) * 60 - 3);
-  if (top < -height || top > 780) return null;
+  const rangeStart = timeline.startHour * 60;
+  const rangeEnd = timeline.endHour * 60;
+  if (end <= rangeStart || start >= rangeEnd) return null;
+  const top = ((Math.max(start, rangeStart) - rangeStart) / 60) * timeline.hourHeight;
+  const bottom = ((Math.min(end, rangeEnd) - rangeStart) / 60) * timeline.hourHeight;
+  const height = Math.max(24, bottom - top - 3);
   return (
     <button draggable onDragStart={(event) => onDragStart(event, { kind: 'plan', id: plan.id })} onDragEnd={onDragEnd} onClick={() => onEdit(plan)} className={`absolute left-1.5 right-1.5 z-10 cursor-grab overflow-hidden rounded-md border p-2 text-left shadow-sm transition hover:-translate-y-px hover:shadow-md active:cursor-grabbing ${categoryMeta[plan.category].card} ${plan.completed ? 'plan-completed' : ''} ${wide ? 'max-w-2xl' : ''}`} style={{ top: Math.max(0, top), height }}>
       <p className="truncate text-[11px] font-semibold">{plan.title}</p>
