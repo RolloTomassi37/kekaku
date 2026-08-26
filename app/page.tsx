@@ -15,7 +15,9 @@ import {
   LayoutGrid,
   ListTodo,
   LoaderCircle,
+  Moon,
   Sparkles,
+  Sun,
   Trash2,
   WandSparkles,
   X,
@@ -28,6 +30,7 @@ type Section = 'calendar' | 'inbox' | 'completed';
 type Source = 'manual' | 'ai' | 'quick';
 type PoolScope = 'week' | 'month';
 type Priority = 'high' | 'medium' | 'low';
+type Theme = 'light' | 'dark';
 
 type Plan = {
   id: string;
@@ -73,6 +76,7 @@ type CalendarDragProps = {
 
 const STORAGE_KEY = 'kekaku-plans-v1';
 const POOL_STORAGE_KEY = 'kekaku-plan-pool-v1';
+const THEME_STORAGE_KEY = 'kekaku-theme-v1';
 const DRAG_MIME = 'application/x-kekaku-plan';
 const weekdayNames = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
 const monthWeekdays = ['一', '二', '三', '四', '五', '六', '日'];
@@ -316,6 +320,7 @@ export default function Home() {
   const [poolItems, setPoolItems] = useState<PoolItem[]>([]);
   const [poolScope, setPoolScope] = useState<PoolScope>('week');
   const [poolOpen, setPoolOpen] = useState(true);
+  const [theme, setTheme] = useState<Theme>('light');
   const [hydrated, setHydrated] = useState(false);
   const [planModalOpen, setPlanModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -342,6 +347,14 @@ export default function Home() {
       setPoolItems(createSamplePool());
     }
     setHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    const saved = localStorage.getItem(THEME_STORAGE_KEY);
+    const next: Theme = saved === 'dark' ? 'dark' : 'light';
+    setTheme(next);
+    document.documentElement.dataset.theme = next;
+    document.documentElement.style.colorScheme = next;
   }, []);
 
   useEffect(() => {
@@ -619,6 +632,16 @@ export default function Home() {
     else setAnchorDate((date) => addDays(date, direction));
   };
 
+  const toggleTheme = () => {
+    setTheme((current) => {
+      const next: Theme = current === 'light' ? 'dark' : 'light';
+      document.documentElement.dataset.theme = next;
+      document.documentElement.style.colorScheme = next;
+      localStorage.setItem(THEME_STORAGE_KEY, next);
+      return next;
+    });
+  };
+
   const title = section === 'calendar' ? '我的计划' : section === 'inbox' ? '快捷收集箱' : '已完成';
 
   return (
@@ -639,14 +662,19 @@ export default function Home() {
               {section === 'calendar' ? '把重要的事，放进真实的时间里' : section === 'inbox' ? '快速捕捉，再从容安排' : '每一次完成都值得看见'}
             </p>
           </div>
-          {section === 'calendar' && (
-            <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2">
+            <button onClick={toggleTheme} aria-label={theme === 'light' ? '切换到黑色主题' : '切换到浅色主题'} title={theme === 'light' ? '黑色主题' : '浅色主题'} className="icon-button shrink-0">
+              {theme === 'light' ? <Moon className="size-4" /> : <Sun className="size-4" />}
+            </button>
+            {section === 'calendar' && (
+              <>
               <button onClick={() => setPoolOpen((open) => !open)} aria-pressed={poolOpen} className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-2 text-xs font-medium transition ${poolOpen ? 'border-black bg-black text-white' : 'border-[#dedede] bg-white hover:bg-[#f6f6f6]'}`}>
                 <ListTodo className="size-3.5" /><span className="hidden sm:inline">计划池</span><span className="rounded-full bg-white/15 px-1.5 text-[9px]">{visiblePoolItems.length}</span>
               </button>
               <ViewSwitch value={view} onChange={setView} />
-            </div>
-          )}
+              </>
+            )}
+          </div>
         </header>
 
         <div className={`mx-auto max-w-[1500px] p-4 md:p-7 ${section === 'calendar' && poolOpen ? 'xl:pr-[356px]' : ''}`}>
