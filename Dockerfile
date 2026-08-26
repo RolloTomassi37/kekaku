@@ -9,7 +9,7 @@ RUN npm run build
 
 FROM golang:1.23-alpine AS api
 WORKDIR /src
-COPY backend/go.mod ./
+COPY backend/go.mod backend/go.sum ./
 RUN go mod download
 COPY backend ./
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /kekaku ./cmd/server
@@ -21,7 +21,7 @@ COPY --from=api /kekaku ./kekaku
 COPY --from=web /src/dist ./dist
 RUN mkdir -p /app/data && chown -R kekaku:kekaku /app
 USER kekaku
-ENV PORT=8080 DATA_FILE=/app/data/kekaku.json STATIC_DIR=/app/dist
+ENV PORT=8080 DATABASE_PATH=/app/data/kekaku.db LEGACY_DATA_FILE=/app/data/kekaku.json STATIC_DIR=/app/dist
 VOLUME ["/app/data"]
 EXPOSE 8080
 CMD ["/app/kekaku"]

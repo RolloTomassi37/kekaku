@@ -18,27 +18,35 @@ import (
 )
 
 func main() {
+	loadEnvFile(".env.local")
 	loadEnvFile(".env")
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	dataFile := env("DATA_FILE", "./data/kekaku.json")
-	dataStore, err := store.Open(dataFile)
+	databasePath := env("DATABASE_PATH", "./data/kekaku.db")
+	legacyDataFile := env("LEGACY_DATA_FILE", env("DATA_FILE", "./data/kekaku.json"))
+	dataStore, err := store.Open(databasePath, legacyDataFile)
 	if err != nil {
 		logger.Error("failed to open data store", "error", err)
 		os.Exit(1)
 	}
+	defer dataStore.Close()
 	aiClient := &ai.Client{APIKey: os.Getenv("DEEPSEEK_API_KEY"), BaseURL: env("DEEPSEEK_BASE_URL", "https://api.deepseek.com"), Model: env("DEEPSEEK_MODEL", "deepseek-v4-flash")}
 	handler := httpapi.New(dataStore, aiClient, env("STATIC_DIR", "./dist"), os.Getenv("CORS_ORIGIN"), logger)
 	server := &http.Server{Addr: ":" + env("PORT", "8080"), Handler: handler, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 120 * time.Second, IdleTimeout: 120 * time.Second}
+	serverErrors := make(chan error, 1)
 	go func() {
-		logger.Info("Kekaku server started", "address", server.Addr, "data", dataFile, "deepseek", aiClient.Available())
+		logger.Info("Kekaku server started", "address", server.Addr, "database", databasePath, "deepseek", aiClient.Available())
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			logger.Error("server stopped", "error", err)
-			os.Exit(1)
+			serverErrors <- err
 		}
 	}()
 	stop, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	<-stop.Done()
+	select {
+	case <-stop.Done():
+	case err := <-serverErrors:
+		logger.Error("server stopped", "error", err)
+		return
+	}
 	ctx, shutdown := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdown()
 	if err := server.Shutdown(ctx); err != nil {

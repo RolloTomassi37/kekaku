@@ -13,10 +13,11 @@ import (
 )
 
 func TestStateEndpoint(t *testing.T) {
-	dataStore, err := store.Open(filepath.Join(t.TempDir(), "state.json"))
+	dataStore, err := store.Open(filepath.Join(t.TempDir(), "state.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = dataStore.Close() })
 	handler := New(dataStore, &ai.Client{}, t.TempDir(), "", nil)
 	request := httptest.NewRequest(http.MethodGet, "/api/state", nil)
 	response := httptest.NewRecorder()
@@ -34,10 +35,11 @@ func TestStateEndpoint(t *testing.T) {
 }
 
 func TestHealthReportsMissingDeepSeekKey(t *testing.T) {
-	dataStore, err := store.Open(filepath.Join(t.TempDir(), "state.json"))
+	dataStore, err := store.Open(filepath.Join(t.TempDir(), "state.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = dataStore.Close() })
 	handler := New(dataStore, &ai.Client{}, t.TempDir(), "", nil)
 	request := httptest.NewRequest(http.MethodGet, "/api/health", nil)
 	response := httptest.NewRecorder()
