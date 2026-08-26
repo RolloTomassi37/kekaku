@@ -714,7 +714,8 @@ export default function Home() {
         const body = await response.json().catch(() => null) as { error?: string } | null;
         throw new Error(body?.error || 'AI 制定暂时不可用，请稍后重试');
       }
-      const result = (await response.json()) as { summary?: string; plans?: PlanDraft[] };
+      const result = (await response.json()) as { schemaVersion?: string; summary?: string; plans?: PlanDraft[] };
+      if (result.schemaVersion !== '1.0') throw new Error('AI 返回的数据格式版本不正确，请重试');
       if (!result.plans?.length) throw new Error('DeepSeek 没有生成可用计划，请换一种描述后重试');
       setAiPreview({
         summary: result.summary || 'DeepSeek 已把你的目标拆成可执行计划。',
