@@ -97,7 +97,7 @@ const monthWeekdays = ['一', '二', '三', '四', '五', '六', '日'];
 const DEFAULT_TIMELINE: TimelineSettings = { startHour: 6, endHour: 23, hourHeight: 48 };
 
 const categoryColorMeta: Record<CategoryColor, Omit<CategoryDisplay, 'label'>> = {
-  violet: { card: 'plan-work', dot: 'bg-blue-500' },
+  violet: { card: 'plan-work', dot: 'bg-violet-500' },
   sky: { card: 'plan-study', dot: 'bg-sky-500' },
   emerald: { card: 'plan-health', dot: 'bg-emerald-500' },
   amber: { card: 'plan-life', dot: 'bg-amber-500' },
@@ -859,27 +859,30 @@ export default function Home() {
     const node = plannerExportRef.current;
     if (!node || exporting) return;
     setExporting('jpg');
+    node.classList.add('is-exporting-jpg');
     try {
       await document.fonts.ready;
-      const calendar = node.querySelector<HTMLElement>('.glass-calendar');
+      await new Promise<void>((resolve) => window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve())));
+      const calendar = node.querySelector<HTMLElement>('.calendar-export-card');
       const width = Math.ceil(Math.max(node.scrollWidth, calendar?.scrollWidth || 0, node.getBoundingClientRect().width));
-      const height = Math.ceil(Math.max(node.scrollHeight, node.getBoundingClientRect().height));
+      const height = Math.ceil(Math.max(node.scrollHeight, (calendar?.scrollHeight || 0) + 72, node.getBoundingClientRect().height));
       const range = currentViewRange(view, anchorDate);
       const dataURL = await toJpeg(node, {
-        quality: 0.95,
-        pixelRatio: 2,
+        quality: 0.98,
+        pixelRatio: 2.5,
         cacheBust: true,
-        backgroundColor: theme === 'dark' ? '#0b111b' : '#eef8ff',
+        backgroundColor: theme === 'dark' ? '#101010' : '#ffffff',
         width,
         height,
         style: { width: `${width}px`, maxWidth: 'none', overflow: 'visible' },
         filter: (target) => !(target instanceof HTMLElement && target.dataset.exportIgnore === 'true'),
       });
       downloadFile(dataURL, `kekaku-${view}-${toISO(range.start)}-${toISO(range.end)}.jpg`);
-      setToast('当前计划页面已导出为 JPG');
+      setToast('当前日历计划已导出为高清 JPG');
     } catch {
       setToast('JPG 导出失败，请稍后重试');
     } finally {
+      node.classList.remove('is-exporting-jpg');
       setExporting(null);
     }
   };
@@ -904,10 +907,12 @@ export default function Home() {
     }
   };
 
+  const exportRange = currentViewRange(view, anchorDate);
+  const exportPlanCount = plans.filter((plan) => plan.date >= toISO(exportRange.start) && plan.date <= toISO(exportRange.end)).length;
   const title = section === 'calendar' ? '我的计划' : section === 'inbox' ? '快捷收集箱' : '已完成';
 
   return (
-    <main className="app-shell min-h-screen bg-white text-[#202020]">
+    <main className="min-h-screen bg-white text-[#202020]">
       <Sidebar
         section={section}
         setSection={setSection}
@@ -920,7 +925,7 @@ export default function Home() {
       />
 
       <section className="min-h-screen md:pl-[224px]">
-        <header className="glass-header sticky top-0 z-20 flex h-16 items-center justify-between border-b border-[#e4e4e4] bg-white/95 px-4 backdrop-blur md:px-7">
+        <header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b border-[#e4e4e4] bg-white/95 px-4 backdrop-blur md:px-7">
           <div>
             <h1 className="text-base font-semibold md:text-lg">{title}</h1>
             <p className="hidden text-xs text-[#777] sm:block">
@@ -951,7 +956,7 @@ export default function Home() {
           style={section === 'calendar' ? { '--calendar-width': `${calendarWidth}%` } as CSSProperties : undefined}
         >
           {section === 'calendar' ? (
-            <div ref={plannerExportRef} className="planner-export-frame">
+            <>
               <PlannerToolbar
                 view={view}
                 anchorDate={anchorDate}
@@ -968,54 +973,60 @@ export default function Home() {
                 onExportICS={exportCurrentICS}
               />
 
-              {view === 'month' && (
-                <MonthView
-                  anchorDate={anchorDate}
-                  today={today}
-                  plans={plans}
-                  categoryMeta={categoryMeta}
-                  onCreate={openCreate}
-                  onEdit={openEdit}
-                  onDrop={dropOnCalendar}
-                  onDragStart={startDragging}
-                  onDragEnd={finishDragging}
-                  dropTarget={dropTarget}
-                  setDropTarget={setDropTarget}
-                />
-              )}
-              {view === 'week' && (
-                <WeekView
-                  days={weekDays}
-                  today={today}
-                  plans={plans}
-                  categoryMeta={categoryMeta}
-                  timeline={timelineSettings}
-                  onCreate={openCreate}
-                  onEdit={openEdit}
-                  onDrop={dropOnCalendar}
-                  onDragStart={startDragging}
-                  onDragEnd={finishDragging}
-                  dropTarget={dropTarget}
-                  setDropTarget={setDropTarget}
-                />
-              )}
-              {view === 'day' && (
-                <DayView
-                  day={anchorDate}
-                  today={today}
-                  plans={plans}
-                  categoryMeta={categoryMeta}
-                  timeline={timelineSettings}
-                  onCreate={openCreate}
-                  onEdit={openEdit}
-                  onDrop={dropOnCalendar}
-                  onDragStart={startDragging}
-                  onDragEnd={finishDragging}
-                  dropTarget={dropTarget}
-                  setDropTarget={setDropTarget}
-                />
-              )}
-            </div>
+              <div ref={plannerExportRef} className="calendar-export-surface">
+                <div className="calendar-export-title">
+                  <div><p className="text-lg font-semibold">{exportRange.label} · {view === 'month' ? '月计划' : view === 'week' ? '周计划' : '日计划'}</p><p className="mt-1 text-xs text-[#777]">Kekaku · 共 {exportPlanCount} 项计划</p></div>
+                  <CalendarDays className="size-5 text-[#777]" />
+                </div>
+                {view === 'month' && (
+                  <MonthView
+                    anchorDate={anchorDate}
+                    today={today}
+                    plans={plans}
+                    categoryMeta={categoryMeta}
+                    onCreate={openCreate}
+                    onEdit={openEdit}
+                    onDrop={dropOnCalendar}
+                    onDragStart={startDragging}
+                    onDragEnd={finishDragging}
+                    dropTarget={dropTarget}
+                    setDropTarget={setDropTarget}
+                  />
+                )}
+                {view === 'week' && (
+                  <WeekView
+                    days={weekDays}
+                    today={today}
+                    plans={plans}
+                    categoryMeta={categoryMeta}
+                    timeline={timelineSettings}
+                    onCreate={openCreate}
+                    onEdit={openEdit}
+                    onDrop={dropOnCalendar}
+                    onDragStart={startDragging}
+                    onDragEnd={finishDragging}
+                    dropTarget={dropTarget}
+                    setDropTarget={setDropTarget}
+                  />
+                )}
+                {view === 'day' && (
+                  <DayView
+                    day={anchorDate}
+                    today={today}
+                    plans={plans}
+                    categoryMeta={categoryMeta}
+                    timeline={timelineSettings}
+                    onCreate={openCreate}
+                    onEdit={openEdit}
+                    onDrop={dropOnCalendar}
+                    onDragStart={startDragging}
+                    onDragEnd={finishDragging}
+                    dropTarget={dropTarget}
+                    setDropTarget={setDropTarget}
+                  />
+                )}
+              </div>
+            </>
           ) : (
             <PlanList
               plans={section === 'inbox' ? inboxPlans : completedPlans}
@@ -1131,12 +1142,12 @@ function PlanPool({
   return (
     <>
       {open && <button aria-label="关闭计划池" onClick={onClose} className="fixed inset-0 top-16 z-30 bg-black/20 backdrop-blur-[1px] xl:hidden" />}
-      <aside className={`glass-plan-pool fixed bottom-0 right-0 top-16 z-40 flex w-[min(336px,92vw)] flex-col border-l border-[#dedede] bg-[#f8f8f8] p-4 shadow-[-12px_0_40px_rgba(0,0,0,.08)] transition-transform duration-200 xl:z-10 ${open ? 'translate-x-0' : 'translate-x-full pointer-events-none'}`}>
+      <aside className={`fixed bottom-0 right-0 top-16 z-40 flex w-[min(336px,92vw)] flex-col border-l border-[#dedede] bg-[#f8f8f8] p-4 shadow-[-12px_0_40px_rgba(0,0,0,.08)] transition-transform duration-200 xl:z-10 xl:shadow-none ${open ? 'translate-x-0' : 'translate-x-full pointer-events-none'}`}>
         <div className="flex items-start justify-between">
           <div><div className="flex items-center gap-2"><h2 className="text-sm font-semibold">计划池</h2><span className="rounded-full bg-[#e9e9e9] px-2 py-0.5 text-[9px] text-[#666]">{items.length} 待安排</span></div><p className="mt-1 text-[11px] text-[#777]">先收集想做的事，再拖到日历安排</p></div>
           <div className="flex gap-1"><button onClick={onCreate} aria-label="添加计划池事项" className="icon-button size-8"><CirclePlus className="size-3.5" /></button><button onClick={onClose} aria-label="关闭计划池" className="icon-button size-8 xl:hidden"><X className="size-3.5" /></button></div>
         </div>
-        <div className="glass-segment mt-4 grid grid-cols-2 rounded-lg border border-[#dedede] bg-[#eee] p-1 text-[11px] font-medium">
+        <div className="mt-4 grid grid-cols-2 rounded-lg border border-[#dedede] bg-[#eee] p-1 text-[11px] font-medium">
           {(['week', 'month'] as PoolScope[]).map((value) => <button key={value} onClick={() => setScope(value)} className={`rounded-md py-1.5 transition ${scope === value ? 'bg-white text-black shadow-sm' : 'text-[#777] hover:text-black'}`}>{value === 'week' ? '本周' : '本月'}</button>)}
         </div>
         <div className="mt-3 flex items-center justify-between text-[10px] text-[#888]"><span>进度 {scheduled}/{total}</span><span>拖动卡片到日历</span></div>
@@ -1149,7 +1160,7 @@ function PlanPool({
               onDragStart={(event) => onDragStart(event, { kind: 'pool', id: item.id })}
               onDragEnd={onDragEnd}
               onClick={() => onEdit(item)}
-              className={`glass-item group cursor-grab rounded-lg border border-[#dedede] bg-white p-3 shadow-[0_1px_1px_rgba(0,0,0,.03)] transition hover:-translate-y-px hover:border-[#bbb] hover:shadow-sm active:cursor-grabbing ${dragging?.kind === 'pool' && dragging.id === item.id ? 'opacity-40' : ''}`}
+              className={`group cursor-grab rounded-lg border border-[#dedede] bg-white p-3 shadow-[0_1px_1px_rgba(0,0,0,.03)] transition hover:-translate-y-px hover:border-[#bbb] hover:shadow-sm active:cursor-grabbing ${dragging?.kind === 'pool' && dragging.id === item.id ? 'opacity-40' : ''}`}
             >
               <div className="flex items-start gap-2">
                 <GripVertical className="mt-0.5 size-3.5 shrink-0 text-[#bbb] group-hover:text-[#777]" />
@@ -1162,7 +1173,7 @@ function PlanPool({
         </div>
 
         <button onClick={onAutoSchedule} disabled={loading || !items.length} className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-black px-3 py-2.5 text-xs font-medium text-white transition hover:bg-[#292929] disabled:cursor-not-allowed disabled:opacity-40">{loading ? <LoaderCircle className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}{loading ? 'DeepSeek 排期中' : 'AI 自动排期'}</button>
-        <div onDragOver={(event) => { if (dragging?.kind === 'plan') { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; } }} onDrop={onDropBack} className={`mt-3 rounded-lg border border-dashed p-3 text-center text-[10px] leading-5 transition ${dragging?.kind === 'plan' ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-[#c8c8c8] text-[#888]'}`}>把日历计划拖到这里<br />取消排期并放回计划池</div>
+        <div onDragOver={(event) => { if (dragging?.kind === 'plan') { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; } }} onDrop={onDropBack} className={`mt-3 rounded-lg border border-dashed p-3 text-center text-[10px] leading-5 transition ${dragging?.kind === 'plan' ? 'border-violet-500 bg-violet-50 text-violet-700' : 'border-[#c8c8c8] text-[#888]'}`}>把日历计划拖到这里<br />取消排期并放回计划池</div>
       </aside>
     </>
   );
@@ -1203,9 +1214,9 @@ function Sidebar({
   onManageCategories: () => void;
 }) {
   return (
-    <aside className="glass-sidebar fixed inset-y-0 left-0 z-30 hidden w-[224px] border-r border-[#dedede] bg-[#f6f6f6] p-3 md:flex md:flex-col">
+    <aside className="fixed inset-y-0 left-0 z-30 hidden w-[224px] border-r border-[#dedede] bg-[#f6f6f6] p-3 md:flex md:flex-col">
       <div className="flex items-center gap-2.5 px-2 py-2">
-        <div className="brand-mark grid size-8 place-items-center rounded-lg bg-black text-sm font-bold text-white">K</div>
+        <div className="grid size-8 place-items-center rounded-lg bg-black text-sm font-bold text-white">K</div>
         <div>
           <p className="text-sm font-semibold">Kekaku</p>
           <p className="text-[11px] text-[#777]">让计划真正发生</p>
@@ -1231,8 +1242,8 @@ function Sidebar({
         ))}
       </div>
 
-      <div className="glass-soft mt-auto rounded-lg border border-[#dfdfdf] bg-white p-3">
-        <div className="mb-2 flex items-center gap-2 text-xs font-medium"><Sparkles className="size-3.5 text-sky-500" /> DeepSeek 计划助手</div>
+      <div className="mt-auto rounded-lg border border-[#dfdfdf] bg-white p-3">
+        <div className="mb-2 flex items-center gap-2 text-xs font-medium"><Sparkles className="size-3.5 text-violet-600" /> DeepSeek 计划助手</div>
         <p className="text-[11px] leading-5 text-[#777]">说出目标，AI 帮你拆成今天能完成的步骤。</p>
         <div className="mt-3 flex items-center gap-2 text-[10px] text-emerald-700"><span className="size-1.5 rounded-full bg-emerald-500" /> 服务端安全连接</div>
       </div>
@@ -1255,7 +1266,7 @@ function ViewSwitch({ value, onChange }: { value: ViewMode; onChange: (value: Vi
     { value: 'day', label: '日', icon: <Calendar1 className="size-3.5" /> },
   ];
   return (
-    <div className="glass-segment flex rounded-lg border border-[#dedede] bg-[#f6f6f6] p-1 text-xs font-medium">
+    <div className="flex rounded-lg border border-[#dedede] bg-[#f6f6f6] p-1 text-xs font-medium">
       {options.map((option) => (
         <button key={option.value} onClick={() => onChange(option.value)} aria-pressed={value === option.value} className={`flex items-center gap-1.5 rounded-md px-2.5 py-1.5 transition sm:px-3 ${value === option.value ? 'bg-white text-black shadow-sm' : 'text-[#666] hover:text-black'}`}>
           <span className="hidden sm:block">{option.icon}</span>{option.label}
@@ -1290,7 +1301,7 @@ function CalendarLayoutControl({ width, timeline, onWidthChange, onTimelineChang
         <span className="hidden lg:inline">布局</span>
       </button>
       {open && (
-        <div id="calendar-layout-panel" className="glass-popover absolute right-0 top-11 z-50 w-72 rounded-xl border border-[#dedede] bg-white p-4 shadow-xl">
+        <div id="calendar-layout-panel" className="absolute right-0 top-11 z-50 w-72 rounded-xl border border-[#dedede] bg-white p-4 shadow-xl">
           <div className="flex items-center justify-between">
             <div><p className="text-xs font-semibold">日历布局</p><p className="mt-1 text-[10px] text-[#777]">设置会自动保存在当前设备</p></div>
             <span className="rounded-md bg-[#f2f2f2] px-2 py-1 text-xs font-semibold tabular-nums">{pad(timeline.startHour)}–{pad(timeline.endHour)}</span>
@@ -1384,8 +1395,8 @@ function PlannerToolbar({
           <h2 className="ml-1 text-base font-semibold sm:text-lg">{rangeTitle}</h2>
         </div>
 
-        <form onSubmit={onSubmit} className="glass-command flex min-w-0 flex-1 items-center gap-2 rounded-xl border border-[#d8d8d8] bg-[#fafafa] p-1.5 transition focus-within:border-[#999] focus-within:bg-white lg:max-w-[520px]">
-          <Sparkles className="ml-2 size-4 shrink-0 text-sky-500" />
+        <form onSubmit={onSubmit} className="flex min-w-0 flex-1 items-center gap-2 rounded-xl border border-[#d8d8d8] bg-[#fafafa] p-1.5 transition focus-within:border-[#999] focus-within:bg-white lg:max-w-[520px]">
+          <Sparkles className="ml-2 size-4 shrink-0 text-violet-600" />
           <input value={quickPrompt} onChange={(event) => setQuickPrompt(event.target.value)} className="min-w-0 flex-1 bg-transparent px-1 text-sm outline-none" placeholder="快捷计划：下周完成发布准备，每天安排 1 小时" aria-label="快捷计划描述" />
           <button disabled={!quickPrompt.trim() || loading} className="flex shrink-0 items-center gap-1.5 rounded-lg bg-black px-3 py-2 text-xs font-medium text-white transition hover:bg-[#292929] disabled:cursor-not-allowed disabled:opacity-40">
             {loading ? <LoaderCircle className="size-3.5 animate-spin" /> : <WandSparkles className="size-3.5" />}
@@ -1396,7 +1407,7 @@ function PlannerToolbar({
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <p className="text-[11px] text-[#888]">支持自然语言输入，DeepSeek 会自动识别日期、时间并拆解复杂目标</p>
         <div data-export-ignore="true" className="flex shrink-0 items-center gap-2">
-          <button onClick={onExportJPG} disabled={Boolean(exporting)} className="export-button" title="把当前月、周或日计划页面保存为 JPG">
+          <button onClick={onExportJPG} disabled={Boolean(exporting)} className="export-button" title="把当前月、周或日的日历计划内容保存为 JPG">
             {exporting === 'jpg' ? <LoaderCircle className="size-3.5 animate-spin" /> : <ImageDown className="size-3.5" />}
             {exporting === 'jpg' ? '生成中' : '导出 JPG'}
           </button>
@@ -1415,7 +1426,7 @@ function MonthView({ anchorDate, today, plans, categoryMeta, onCreate, onEdit, o
   const gridStart = startOfWeek(first);
   const days = Array.from({ length: 42 }, (_, index) => addDays(gridStart, index));
   return (
-    <div className="glass-calendar overflow-auto rounded-xl border border-[#dedede] bg-white shadow-[0_1px_2px_rgba(0,0,0,.04)]">
+    <div className="calendar-export-card overflow-auto rounded-xl border border-[#dedede] bg-white shadow-[0_1px_2px_rgba(0,0,0,.04)]">
       <div className="grid min-w-[760px] grid-cols-7 border-b border-[#dedede] bg-[#fafafa]">
         {monthWeekdays.map((day) => <div key={day} className="px-3 py-3 text-center text-[11px] font-medium text-[#777]">周{day}</div>)}
       </div>
@@ -1430,19 +1441,19 @@ function MonthView({ anchorDate, today, plans, categoryMeta, onCreate, onEdit, o
               onDoubleClick={() => onCreate(day)}
               onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; setDropTarget(targetId); }}
               onDrop={(event) => onDrop(event, day)}
-              className={`group min-h-[132px] border-b border-r border-[#e7e7e7] p-2 last:border-r-0 ${outside ? 'bg-[#fafafa] text-[#aaa]' : 'bg-white'} ${isSameDay(day, today) ? 'bg-blue-50/30' : ''} ${dropTarget === targetId ? 'calendar-drop-active' : ''}`}
+              className={`group min-h-[132px] border-b border-r border-[#e7e7e7] p-2 last:border-r-0 ${outside ? 'bg-[#fafafa] text-[#aaa]' : 'bg-white'} ${isSameDay(day, today) ? 'bg-violet-50/30' : ''} ${dropTarget === targetId ? 'calendar-drop-active' : ''}`}
             >
               <div className="mb-2 flex items-center justify-between">
                 <span className={`grid size-7 place-items-center rounded-full text-xs font-semibold ${isSameDay(day, today) ? 'bg-black text-white' : ''}`}>{day.getDate()}</span>
-                <button onClick={() => onCreate(day)} aria-label={`${formatChineseDate(day)}新建计划`} className="grid size-6 place-items-center rounded-md text-[#888] opacity-0 hover:bg-[#eee] group-hover:opacity-100"><CirclePlus className="size-3.5" /></button>
+                <button data-export-ignore="true" onClick={() => onCreate(day)} aria-label={`${formatChineseDate(day)}新建计划`} className="grid size-6 place-items-center rounded-md text-[#888] opacity-0 hover:bg-[#eee] group-hover:opacity-100"><CirclePlus className="size-3.5" /></button>
               </div>
               <div className="space-y-1">
-                {dayPlans.slice(0, 3).map((plan) => (
-                  <button key={plan.id} draggable onDragStart={(event) => onDragStart(event, { kind: 'plan', id: plan.id })} onDragEnd={onDragEnd} onClick={() => onEdit(plan)} className={`block w-full cursor-grab truncate rounded px-1.5 py-1 text-left text-[10px] font-medium active:cursor-grabbing ${categoryDisplay(categoryMeta, plan.category).card} ${plan.completed ? 'plan-completed' : ''}`}>
+                {dayPlans.map((plan, index) => (
+                  <button key={plan.id} draggable onDragStart={(event) => onDragStart(event, { kind: 'plan', id: plan.id })} onDragEnd={onDragEnd} onClick={() => onEdit(plan)} className={`month-plan-item block w-full cursor-grab truncate rounded px-1.5 py-1 text-left text-[10px] font-medium active:cursor-grabbing ${index >= 3 ? 'month-plan-overflow' : ''} ${categoryDisplay(categoryMeta, plan.category).card} ${plan.completed ? 'plan-completed' : ''}`}>
                     <span className="mr-1 opacity-60">{plan.startTime}</span>{plan.title}
                   </button>
                 ))}
-                {dayPlans.length > 3 && <p className="px-1 text-[10px] text-[#777]">还有 {dayPlans.length - 3} 项</p>}
+                {dayPlans.length > 3 && <p data-export-ignore="true" className="px-1 text-[10px] text-[#777]">还有 {dayPlans.length - 3} 项</p>}
               </div>
             </div>
           );
@@ -1457,7 +1468,7 @@ function WeekView({ days, today, plans, categoryMeta, timeline, onCreate, onEdit
   const timelineHeight = (timeline.endHour - timeline.startHour) * timeline.hourHeight;
   const timelineStyle = { height: timelineHeight, '--hour-height': `${timeline.hourHeight}px` } as CSSProperties;
   return (
-    <div className="glass-calendar overflow-auto rounded-xl border border-[#dedede] bg-white shadow-[0_1px_2px_rgba(0,0,0,.04)]">
+    <div className="calendar-export-card overflow-auto rounded-xl border border-[#dedede] bg-white shadow-[0_1px_2px_rgba(0,0,0,.04)]">
       <div className="grid min-w-[920px] grid-cols-[56px_repeat(7,minmax(122px,1fr))] border-b border-[#dedede] bg-[#fafafa]">
         <div />
         {days.map((day, index) => (
@@ -1477,7 +1488,7 @@ function WeekView({ days, today, plans, categoryMeta, timeline, onCreate, onEdit
           return (
             <div
               key={toISO(day)}
-              className={`relative border-l border-[#e6e6e6] ${isSameDay(day, today) ? 'bg-blue-50/30' : ''} ${dropTarget === targetId ? 'calendar-drop-active' : ''}`}
+              className={`relative border-l border-[#e6e6e6] ${isSameDay(day, today) ? 'bg-violet-50/30' : ''} ${dropTarget === targetId ? 'calendar-drop-active' : ''}`}
               onDoubleClick={(event) => {
                 onCreate(day, timeFromPointer(event, event.currentTarget, timeline));
               }}
@@ -1499,11 +1510,11 @@ function DayView({ day, today, plans, categoryMeta, timeline, onCreate, onEdit, 
   const timelineHeight = (timeline.endHour - timeline.startHour) * timeline.hourHeight;
   const timelineStyle = { height: timelineHeight, '--hour-height': `${timeline.hourHeight}px` } as CSSProperties;
   return (
-    <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_280px]">
-      <div className="glass-calendar overflow-hidden rounded-xl border border-[#dedede] bg-white shadow-[0_1px_2px_rgba(0,0,0,.04)]">
+    <div className="day-view-grid grid gap-4 xl:grid-cols-[minmax(0,1fr)_280px]">
+      <div className="calendar-export-card overflow-hidden rounded-xl border border-[#dedede] bg-white shadow-[0_1px_2px_rgba(0,0,0,.04)]">
         <div className="flex items-center justify-between border-b border-[#dedede] bg-[#fafafa] px-5 py-4">
           <div className="flex items-center gap-3"><span className={`grid size-9 place-items-center rounded-full text-sm font-semibold ${isSameDay(day, today) ? 'bg-black text-white' : 'bg-[#ededed]'}`}>{day.getDate()}</span><div><p className="text-sm font-semibold">{weekdayNames[(day.getDay() + 6) % 7]}</p><p className="text-[11px] text-[#777]">{formatChineseDate(day)}</p></div></div>
-          <button onClick={() => onCreate(day)} className="flex items-center gap-1.5 rounded-lg bg-black px-3 py-2 text-xs font-medium text-white"><CirclePlus className="size-3.5" />添加</button>
+          <button data-export-ignore="true" onClick={() => onCreate(day)} className="flex items-center gap-1.5 rounded-lg bg-black px-3 py-2 text-xs font-medium text-white"><CirclePlus className="size-3.5" />添加</button>
         </div>
         <div className="timeline-grid relative grid grid-cols-[64px_1fr]" style={timelineStyle}>
           <div className="relative">{timelineHours.map((hour, index) => <span key={hour} className="absolute right-3 -translate-y-1/2 text-[10px] text-[#999]" style={{ top: Math.min(index * timeline.hourHeight, timelineHeight - 1) }}>{pad(hour)}:00</span>)}</div>
@@ -1519,7 +1530,7 @@ function DayView({ day, today, plans, categoryMeta, timeline, onCreate, onEdit, 
           </div>
         </div>
       </div>
-      <aside className="glass-soft h-fit rounded-xl border border-[#dedede] bg-[#fafafa] p-4">
+      <aside data-export-ignore="true" className="h-fit rounded-xl border border-[#dedede] bg-[#fafafa] p-4">
         <p className="text-xs font-semibold">今日摘要</p>
         <div className="mt-3 flex items-end gap-2"><span className="text-3xl font-semibold">{dayPlans.length}</span><span className="pb-1 text-xs text-[#777]">项计划</span></div>
         <div className="mt-4 space-y-3">
@@ -1565,7 +1576,7 @@ function PlanList({ plans, categoryMeta, emptyText, onEdit, onToggle }: { plans:
   return (
     <div className="mx-auto max-w-3xl">
       <div className="mb-5 flex items-center justify-between"><p className="text-sm text-[#777]">共 {sorted.length} 项</p></div>
-      <div className="glass-list overflow-hidden rounded-xl border border-[#dedede] bg-white">
+      <div className="overflow-hidden rounded-xl border border-[#dedede] bg-white">
         {sorted.map((plan) => (
           <div key={plan.id} className="flex items-center gap-3 border-b border-[#ececec] p-4 last:border-b-0 hover:bg-[#fafafa]">
             <button onClick={() => onToggle(plan.id)} aria-label={plan.completed ? '恢复为未完成' : '标记为已完成'} className={`grid size-6 shrink-0 place-items-center rounded-full border ${plan.completed ? 'border-black bg-black text-white' : 'border-[#ccc] text-transparent hover:text-[#999]'}`}><Check className="size-3.5" /></button>
@@ -1573,7 +1584,7 @@ function PlanList({ plans, categoryMeta, emptyText, onEdit, onToggle }: { plans:
               <p className={`truncate text-sm font-medium ${plan.completed ? 'text-[#888] line-through' : ''}`}>{plan.title}</p>
               <p className="mt-1 text-[11px] text-[#777]">{plan.date} · {plan.startTime}–{plan.endTime} · {categoryDisplay(categoryMeta, plan.category).label}</p>
             </button>
-            {plan.source !== 'manual' && <span className="rounded-full bg-blue-50 px-2 py-1 text-[10px] text-blue-700">{plan.source === 'ai' ? 'DeepSeek' : '快捷'}</span>}
+            {plan.source !== 'manual' && <span className="rounded-full bg-violet-50 px-2 py-1 text-[10px] text-violet-700">{plan.source === 'ai' ? 'DeepSeek' : '快捷'}</span>}
           </div>
         ))}
         {!sorted.length && <div className="grid min-h-64 place-items-center p-8 text-center"><div><Inbox className="mx-auto size-8 text-[#bbb]" /><p className="mt-3 text-sm font-medium">这里还是空的</p><p className="mt-1 text-xs text-[#888]">{emptyText}</p></div></div>}
@@ -1679,7 +1690,7 @@ function AiPreviewModal({ preview, categoryMeta, onClose, onAdd }: { preview: Ai
   return (
     <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <section className="modal-card max-w-[620px]">
-        <div className="flex items-start justify-between border-b border-[#e7e7e7] px-5 py-4"><div className="flex gap-3"><div className="grid size-9 shrink-0 place-items-center rounded-lg bg-blue-100 text-blue-700"><Sparkles className="size-4" /></div><div><h2 className="text-base font-semibold">智能安排预览</h2><p className="mt-1 max-w-md text-xs leading-5 text-[#777]">{preview.summary}</p></div></div><button onClick={onClose} className="icon-button border-0"><X className="size-4" /></button></div>
+        <div className="flex items-start justify-between border-b border-[#e7e7e7] px-5 py-4"><div className="flex gap-3"><div className="grid size-9 shrink-0 place-items-center rounded-lg bg-violet-100 text-violet-700"><Sparkles className="size-4" /></div><div><h2 className="text-base font-semibold">智能安排预览</h2><p className="mt-1 max-w-md text-xs leading-5 text-[#777]">{preview.summary}</p></div></div><button onClick={onClose} className="icon-button border-0"><X className="size-4" /></button></div>
         <div className="max-h-[55vh] space-y-2 overflow-y-auto p-5">
           {preview.plans.map((plan, index) => (
             <div key={`${plan.date}-${plan.title}-${index}`} className="flex items-start gap-3 rounded-lg border border-[#e1e1e1] p-3">
@@ -1696,7 +1707,7 @@ function AiPreviewModal({ preview, categoryMeta, onClose, onAdd }: { preview: Ai
 
 function MobileNav({ section, setSection, onCreate }: { section: Section; setSection: (section: Section) => void; onCreate: () => void }) {
   return (
-    <nav className="glass-mobile-nav fixed inset-x-0 bottom-0 z-30 flex items-center justify-around border-t border-[#dedede] bg-white/95 px-3 py-2 backdrop-blur md:hidden">
+    <nav className="fixed inset-x-0 bottom-0 z-30 flex items-center justify-around border-t border-[#dedede] bg-white/95 px-3 py-2 backdrop-blur md:hidden">
       <button onClick={() => setSection('calendar')} className={`mobile-nav-item ${section === 'calendar' ? 'text-black' : 'text-[#888]'}`}><LayoutGrid className="size-5" />计划</button>
       <button onClick={onCreate} className="mobile-nav-item text-[#555]"><CirclePlus className="size-5" />新建</button>
       <button onClick={() => setSection('inbox')} className={`mobile-nav-item ${section === 'inbox' ? 'text-black' : 'text-[#888]'}`}><Sparkles className="size-5" />AI 计划</button>
