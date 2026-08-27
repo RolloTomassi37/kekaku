@@ -14,7 +14,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 1
+const schemaVersion = 2
 
 type Store struct {
 	mu    sync.RWMutex
@@ -169,6 +169,16 @@ func (s *Store) migrate() error {
 			hour_height INTEGER NOT NULL CHECK (hour_height BETWEEN 40 AND 72),
 			updated_at TEXT NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS countdown_timer (
+			id INTEGER PRIMARY KEY CHECK (id = 1),
+			plan_id TEXT NOT NULL DEFAULT '',
+			label TEXT NOT NULL,
+			duration_seconds INTEGER NOT NULL CHECK (duration_seconds BETWEEN 1 AND 359999),
+			remaining_seconds INTEGER NOT NULL CHECK (remaining_seconds BETWEEN 0 AND 359999),
+			ends_at TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL CHECK (status IN ('idle', 'running', 'paused', 'finished')),
+			updated_at TEXT NOT NULL
+		)`,
 		`CREATE INDEX IF NOT EXISTS idx_plans_date_time ON plans(plan_date, start_time)`,
 		`CREATE INDEX IF NOT EXISTS idx_plans_completed ON plans(completed)`,
 		`CREATE INDEX IF NOT EXISTS idx_pool_scope_scheduled ON pool_items(scope, scheduled)`,
@@ -202,6 +212,22 @@ func (s *Store) readState() (domain.State, bool, error) {
 	}
 	if err != nil {
 		return domain.State{}, false, err
+	}
+	var timerPlanID, timerEndsAt string
+	err = s.db.QueryRow(`SELECT plan_id, label, duration_seconds, remaining_seconds, ends_at, status FROM countdown_timer WHERE id = 1`).Scan(
+		&timerPlanID,
+		&state.Timer.Label,
+		&state.Timer.DurationSeconds,
+		&state.Timer.RemainingSeconds,
+		&timerEndsAt,
+		&state.Timer.Status,
+	)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return domain.State{}, false, err
+	}
+	if err == nil {
+		state.Timer.PlanID = timerPlanID
+		state.Timer.EndsAt = timerEndsAt
 	}
 
 	categoryRows, err := s.db.Query(`SELECT id, label, color FROM categories ORDER BY sort_order, id`)
@@ -311,6 +337,21 @@ func (s *Store) replaceLocked(state domain.State) error {
 		state.Settings.Timeline.StartHour,
 		state.Settings.Timeline.EndHour,
 		state.Settings.Timeline.HourHeight,
+		time.Now().UTC().Format(time.RFC3339),
+	); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT INTO countdown_timer(id, plan_id, label, duration_seconds, remaining_seconds, ends_at, status, updated_at)
+		VALUES (1, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET plan_id = excluded.plan_id, label = excluded.label,
+		duration_seconds = excluded.duration_seconds, remaining_seconds = excluded.remaining_seconds,
+		ends_at = excluded.ends_at, status = excluded.status, updated_at = excluded.updated_at`,
+		state.Timer.PlanID,
+		state.Timer.Label,
+		state.Timer.DurationSeconds,
+		state.Timer.RemainingSeconds,
+		state.Timer.EndsAt,
+		state.Timer.Status,
 		time.Now().UTC().Format(time.RFC3339),
 	); err != nil {
 		return err

@@ -41,3 +41,29 @@ func TestNormalizeRejectsInvalidPlan(t *testing.T) {
 		t.Fatal("Normalize() should reject invalid date")
 	}
 }
+
+func TestNormalizeCountdownTimer(t *testing.T) {
+	state := DefaultState(time.Now())
+	state.Timer = CountdownTimer{
+		PlanID:           state.Plans[0].ID,
+		DurationSeconds:  25 * 60,
+		RemainingSeconds: 12 * 60,
+		Status:           "paused",
+	}
+	normalized, err := Normalize(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if normalized.Timer.Label != state.Plans[0].Title || normalized.Timer.RemainingSeconds != 12*60 {
+		t.Fatalf("timer = %+v", normalized.Timer)
+	}
+
+	state.Timer = CountdownTimer{PlanID: "missing", DurationSeconds: -1, RemainingSeconds: -1, Status: "unknown"}
+	normalized, err = Normalize(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if normalized.Timer.PlanID != "" || normalized.Timer.DurationSeconds != 300 || normalized.Timer.RemainingSeconds != 300 || normalized.Timer.Status != "idle" {
+		t.Fatalf("normalized invalid timer = %+v", normalized.Timer)
+	}
+}

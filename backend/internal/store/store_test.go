@@ -20,6 +20,7 @@ func TestStorePersistsStateInSQLite(t *testing.T) {
 	state := first.Get()
 	state.Settings.Theme = "dark"
 	state.Plans[0].Completed = true
+	state.Timer = domain.CountdownTimer{PlanID: state.Plans[0].ID, Label: state.Plans[0].Title, DurationSeconds: 1500, RemainingSeconds: 1490, EndsAt: time.Now().Add(1490 * time.Second).UTC().Format(time.RFC3339), Status: "running"}
 	if err := first.Replace(state); err != nil {
 		t.Fatalf("Replace() error = %v", err)
 	}
@@ -44,12 +45,38 @@ func TestStorePersistsStateInSQLite(t *testing.T) {
 	if persisted.Settings.Theme != "dark" || !persisted.Plans[0].Completed {
 		t.Fatal("state was not persisted in SQLite")
 	}
+	if persisted.Timer.Status != "running" || persisted.Timer.PlanID != persisted.Plans[0].ID || persisted.Timer.DurationSeconds != 1500 {
+		t.Fatalf("timer was not persisted in SQLite: %+v", persisted.Timer)
+	}
 	var planCount int
 	if err := second.db.QueryRow("SELECT COUNT(*) FROM plans").Scan(&planCount); err != nil {
 		t.Fatalf("query plans error = %v", err)
 	}
 	if planCount != len(persisted.Plans) {
 		t.Fatalf("plan rows = %d, want %d", planCount, len(persisted.Plans))
+	}
+}
+
+func TestOpenMigratesExistingDatabaseWithCountdownTimer(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "kekaku.db")
+	dataStore, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dataStore.db.Exec(`DELETE FROM countdown_timer`); err != nil {
+		t.Fatal(err)
+	}
+	if err := dataStore.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	if reopened.Get().Timer.DurationSeconds != 300 || reopened.Get().Timer.Status != "idle" {
+		t.Fatalf("default timer was not restored: %+v", reopened.Get().Timer)
 	}
 }
 

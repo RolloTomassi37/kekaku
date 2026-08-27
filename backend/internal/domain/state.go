@@ -43,6 +43,15 @@ type Timeline struct {
 	HourHeight int `json:"hourHeight"`
 }
 
+type CountdownTimer struct {
+	PlanID           string `json:"planId,omitempty"`
+	Label            string `json:"label"`
+	DurationSeconds  int    `json:"durationSeconds"`
+	RemainingSeconds int    `json:"remainingSeconds"`
+	EndsAt           string `json:"endsAt,omitempty"`
+	Status           string `json:"status"`
+}
+
 type Settings struct {
 	Theme         string   `json:"theme"`
 	CalendarWidth int      `json:"calendarWidth"`
@@ -50,10 +59,11 @@ type Settings struct {
 }
 
 type State struct {
-	Plans      []Plan     `json:"plans"`
-	PoolItems  []PoolItem `json:"poolItems"`
-	Categories []Category `json:"categories"`
-	Settings   Settings   `json:"settings"`
+	Plans      []Plan         `json:"plans"`
+	PoolItems  []PoolItem     `json:"poolItems"`
+	Categories []Category     `json:"categories"`
+	Settings   Settings       `json:"settings"`
+	Timer      CountdownTimer `json:"timer"`
 }
 
 var allowedColors = map[string]bool{"violet": true, "sky": true, "emerald": true, "amber": true, "zinc": true}
@@ -65,6 +75,7 @@ func DefaultState(now time.Time) State {
 	return State{
 		Categories: []Category{{ID: "personal", Label: "个人", Color: "amber"}, {ID: "work", Label: "工作", Color: "violet"}, {ID: "study", Label: "学习", Color: "sky"}},
 		Settings:   Settings{Theme: "light", CalendarWidth: 100, Timeline: Timeline{StartHour: 6, EndHour: 23, HourHeight: 48}},
+		Timer:      CountdownTimer{Label: "专注计时", DurationSeconds: 5 * 60, RemainingSeconds: 5 * 60, Status: "idle"},
 		Plans: []Plan{
 			{ID: "sample-1", Title: "梳理本周目标", Date: date(0), StartTime: "09:30", EndTime: "10:30", Category: "personal", Note: "只保留三个最重要的结果。", Source: "manual"},
 			{ID: "sample-2", Title: "产品方案评审", Date: date(2), StartTime: "10:00", EndTime: "11:30", Category: "work", Note: "确认范围、负责人和交付节点。", Source: "manual"},
@@ -108,6 +119,7 @@ func Normalize(state State) (State, error) {
 		state.Categories = append([]Category{{ID: "personal", Label: "个人", Color: "amber"}}, state.Categories...)
 		categoryIDs["personal"] = true
 	}
+	planTitles := make(map[string]string, len(state.Plans))
 	for i := range state.Plans {
 		plan := &state.Plans[i]
 		plan.ID = strings.TrimSpace(plan.ID)
@@ -121,6 +133,7 @@ func Normalize(state State) (State, error) {
 		if plan.Source != "ai" && plan.Source != "quick" {
 			plan.Source = "manual"
 		}
+		planTitles[plan.ID] = plan.Title
 	}
 	for i := range state.PoolItems {
 		item := &state.PoolItems[i]
@@ -152,6 +165,43 @@ func Normalize(state State) (State, error) {
 	state.Settings.Timeline.StartHour = clamp(state.Settings.Timeline.StartHour, 0, 22, 6)
 	state.Settings.Timeline.EndHour = clamp(state.Settings.Timeline.EndHour, state.Settings.Timeline.StartHour+2, 24, 23)
 	state.Settings.Timeline.HourHeight = clamp(state.Settings.Timeline.HourHeight, 40, 72, 48)
+	state.Timer.PlanID = strings.TrimSpace(state.Timer.PlanID)
+	state.Timer.Label = strings.TrimSpace(state.Timer.Label)
+	if state.Timer.DurationSeconds < 1 || state.Timer.DurationSeconds > 359999 {
+		state.Timer.DurationSeconds = 5 * 60
+	}
+	if state.Timer.RemainingSeconds < 0 || state.Timer.RemainingSeconds > state.Timer.DurationSeconds {
+		state.Timer.RemainingSeconds = state.Timer.DurationSeconds
+	}
+	if state.Timer.Status != "running" && state.Timer.Status != "paused" && state.Timer.Status != "finished" {
+		state.Timer.Status = "idle"
+	}
+	if state.Timer.Status == "running" {
+		if _, err := time.Parse(time.RFC3339, state.Timer.EndsAt); err != nil {
+			state.Timer.Status = "paused"
+			state.Timer.EndsAt = ""
+		}
+	} else {
+		state.Timer.EndsAt = ""
+	}
+	if state.Timer.Status == "idle" && state.Timer.RemainingSeconds == 0 {
+		state.Timer.RemainingSeconds = state.Timer.DurationSeconds
+	}
+	if state.Timer.Status == "finished" {
+		state.Timer.RemainingSeconds = 0
+	}
+	if state.Timer.PlanID != "" {
+		if title, ok := planTitles[state.Timer.PlanID]; ok {
+			if state.Timer.Label == "" {
+				state.Timer.Label = title
+			}
+		} else {
+			state.Timer.PlanID = ""
+		}
+	}
+	if state.Timer.Label == "" {
+		state.Timer.Label = "专注计时"
+	}
 	if state.Plans == nil {
 		state.Plans = []Plan{}
 	}

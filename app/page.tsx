@@ -2,6 +2,7 @@ import {
   Calendar1,
   CalendarDays,
   CalendarRange,
+  BellRing,
   Check,
   CheckCircle2,
   ChevronLeft,
@@ -15,13 +16,19 @@ import {
   ListTodo,
   LoaderCircle,
   Mail,
+  Maximize2,
+  Minimize2,
   Moon,
+  Pause,
+  Play,
+  RotateCcw,
   Send,
   Settings2,
   ShieldCheck,
   SlidersHorizontal,
   Sparkles,
   Sun,
+  Timer as TimerIcon,
   Trash2,
   WandSparkles,
   X,
@@ -39,6 +46,8 @@ type Priority = 'high' | 'medium' | 'low';
 type Theme = 'light' | 'dark';
 type ExportKind = 'jpg' | 'ics';
 type TimelineSettings = { startHour: number; endHour: number; hourHeight: number };
+type CountdownStatus = 'idle' | 'running' | 'paused' | 'finished';
+type CountdownTimer = { planId?: string; label: string; durationSeconds: number; remainingSeconds: number; endsAt?: string; status: CountdownStatus };
 type CategoryDefinition = { id: string; label: string; color: CategoryColor };
 type CategoryDisplay = { label: string; card: string; dot: string };
 type CategoryDisplayMap = Record<string, CategoryDisplay>;
@@ -90,6 +99,7 @@ type PersistedState = {
   poolItems: PoolItem[];
   categories: CategoryDefinition[];
   settings: { theme: Theme; calendarWidth: number; timeline: TimelineSettings };
+  timer: CountdownTimer;
 };
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '';
@@ -97,6 +107,8 @@ const DRAG_MIME = 'application/x-kekaku-plan';
 const weekdayNames = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
 const monthWeekdays = ['一', '二', '三', '四', '五', '六', '日'];
 const DEFAULT_TIMELINE: TimelineSettings = { startHour: 6, endHour: 23, hourHeight: 48 };
+const DEFAULT_COUNTDOWN: CountdownTimer = { label: '专注计时', durationSeconds: 5 * 60, remainingSeconds: 5 * 60, status: 'idle' };
+const TIMER_PRESETS = [5, 15, 25, 45, 60];
 
 const categoryColorMeta: Record<CategoryColor, Omit<CategoryDisplay, 'label'>> = {
   violet: { card: 'plan-work', dot: 'bg-violet-500' },
@@ -123,6 +135,48 @@ const priorityMeta: Record<Priority, { label: string; className: string }> = {
 
 function pad(value: number) {
   return String(value).padStart(2, '0');
+}
+
+function normalizeCountdown(value?: Partial<CountdownTimer>): CountdownTimer {
+  const rawDuration = Number(value?.durationSeconds);
+  const durationSeconds = Number.isFinite(rawDuration) ? Math.max(1, Math.min(359999, Math.round(rawDuration))) : DEFAULT_COUNTDOWN.durationSeconds;
+  const rawRemaining = Number(value?.remainingSeconds);
+  const status: CountdownStatus = value?.status === 'running' || value?.status === 'paused' || value?.status === 'finished' ? value.status : 'idle';
+  const remainingSeconds = status === 'finished'
+    ? 0
+    : Number.isFinite(rawRemaining) ? Math.max(0, Math.min(durationSeconds, Math.round(rawRemaining))) : durationSeconds;
+  const validEnd = status === 'running' && value?.endsAt && Number.isFinite(Date.parse(value.endsAt));
+  return {
+    planId: value?.planId?.trim() || undefined,
+    label: value?.label?.trim() || DEFAULT_COUNTDOWN.label,
+    durationSeconds,
+    remainingSeconds: status === 'idle' && remainingSeconds === 0 ? durationSeconds : remainingSeconds,
+    endsAt: validEnd ? value.endsAt : undefined,
+    status: status === 'running' && !validEnd ? 'paused' : status,
+  };
+}
+
+function countdownRemaining(timer: CountdownTimer, now: number) {
+  if (timer.status !== 'running' || !timer.endsAt) return timer.remainingSeconds;
+  return Math.max(0, Math.ceil((Date.parse(timer.endsAt) - now) / 1000));
+}
+
+function formatCountdown(totalSeconds: number) {
+  const safe = Math.max(0, Math.floor(totalSeconds));
+  const hours = Math.floor(safe / 3600);
+  const minutesPart = Math.floor((safe % 3600) / 60);
+  const seconds = safe % 60;
+  return `${pad(hours)}:${pad(minutesPart)}:${pad(seconds)}`;
+}
+
+function countdownDurationLabel(seconds: number) {
+  if (seconds % 3600 === 0) return `${seconds / 3600} 小时`;
+  if (seconds % 60 === 0) return `${seconds / 60} 分钟`;
+  return formatCountdown(seconds);
+}
+
+function planDurationSeconds(plan: Plan) {
+  return Math.max(60, (minutes(plan.endTime) - minutes(plan.startTime)) * 60);
 }
 
 function normalizeTimelineSettings(value: Partial<TimelineSettings>): TimelineSettings {
@@ -393,7 +447,12 @@ export default function Home() {
   const [icsEmailOpen, setIcsEmailOpen] = useState(false);
   const [smtpPassword, setSmtpPassword] = useState('');
   const [icsEmailError, setIcsEmailError] = useState('');
+  const [countdown, setCountdown] = useState<CountdownTimer>(DEFAULT_COUNTDOWN);
+  const [timerOpen, setTimerOpen] = useState(false);
+  const [timerExpanded, setTimerExpanded] = useState(false);
+  const [clockNow, setClockNow] = useState(() => Date.now());
   const plannerExportRef = useRef<HTMLDivElement>(null);
+  const timerAudioRef = useRef<AudioContext | null>(null);
 
   /* Persisted application state is hydrated from the Go API after mount. */
   /* eslint-disable react-hooks/set-state-in-effect */
@@ -415,6 +474,9 @@ export default function Home() {
         setTheme(nextTheme);
         setCalendarWidth(Math.max(70, Math.min(100, Number(state.settings?.calendarWidth) || 100)));
         setTimelineSettings(normalizeTimelineSettings(state.settings?.timeline || DEFAULT_TIMELINE));
+        const restoredTimer = normalizeCountdown(state.timer);
+        setCountdown(restoredTimer);
+        setTimerOpen(restoredTimer.status !== 'idle');
         document.documentElement.dataset.theme = nextTheme;
         document.documentElement.style.colorScheme = nextTheme;
       })
@@ -433,7 +495,7 @@ export default function Home() {
     if (!hydrated) return;
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
-      const state: PersistedState = { plans, poolItems, categories, settings: { theme, calendarWidth, timeline: timelineSettings } };
+      const state: PersistedState = { plans, poolItems, categories, settings: { theme, calendarWidth, timeline: timelineSettings }, timer: countdown };
       void fetch(`${API_BASE}/api/state`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -447,13 +509,57 @@ export default function Home() {
       });
     }, 350);
     return () => { window.clearTimeout(timer); controller.abort(); };
-  }, [calendarWidth, categories, hydrated, plans, poolItems, theme, timelineSettings]);
+  }, [calendarWidth, categories, countdown, hydrated, plans, poolItems, theme, timelineSettings]);
 
   useEffect(() => {
     if (!toast) return;
     const timer = window.setTimeout(() => setToast(''), 2600);
     return () => window.clearTimeout(timer);
   }, [toast]);
+
+  const remainingTime = countdownRemaining(countdown, clockNow);
+
+  useEffect(() => {
+    if (countdown.status !== 'running') return;
+    setClockNow(Date.now());
+    const ticker = window.setInterval(() => setClockNow(Date.now()), 250);
+    return () => window.clearInterval(ticker);
+  }, [countdown.endsAt, countdown.status]);
+
+  useEffect(() => {
+    if (countdown.status !== 'running' || remainingTime > 0) return;
+    setCountdown((current) => current.status === 'running' ? { ...current, status: 'finished', remainingSeconds: 0, endsAt: undefined } : current);
+    setTimerOpen(true);
+    setTimerExpanded(false);
+    setToast(`${countdown.label} · 倒计时结束`);
+    const audio = timerAudioRef.current;
+    if (audio) {
+      void audio.resume().then(() => {
+        [0, 0.22].forEach((delay, index) => {
+          const oscillator = audio.createOscillator();
+          const gain = audio.createGain();
+          oscillator.frequency.value = index === 0 ? 880 : 1046;
+          gain.gain.setValueAtTime(0.0001, audio.currentTime + delay);
+          gain.gain.exponentialRampToValueAtTime(0.18, audio.currentTime + delay + 0.02);
+          gain.gain.exponentialRampToValueAtTime(0.0001, audio.currentTime + delay + 0.2);
+          oscillator.connect(gain).connect(audio.destination);
+          oscillator.start(audio.currentTime + delay);
+          oscillator.stop(audio.currentTime + delay + 0.22);
+        });
+      }).catch(() => undefined);
+    }
+    if ('Notification' in window && Notification.permission === 'granted') {
+      new Notification('Kekaku 倒计时结束', { body: countdown.label });
+    }
+  }, [countdown.label, countdown.status, remainingTime]);
+
+  useEffect(() => {
+    const defaultTitle = 'Kekaku · 我的计划';
+    document.title = countdown.status === 'running' || countdown.status === 'paused'
+      ? `${formatCountdown(remainingTime)} · ${countdown.label}`
+      : defaultTitle;
+    return () => { document.title = defaultTitle; };
+  }, [countdown.label, countdown.status, remainingTime]);
 
   const today = useMemo(() => startOfDay(new Date()), []);
   const activePlans = useMemo(() => plans.filter((plan) => !plan.completed), [plans]);
@@ -494,6 +600,69 @@ export default function Home() {
       poolId: plan.poolId,
     });
     setPlanModalOpen(true);
+  };
+
+  const primeTimerAudio = () => {
+    try {
+      if (!timerAudioRef.current) timerAudioRef.current = new AudioContext();
+      void timerAudioRef.current.resume();
+    } catch {
+      // The visual completion state still works when audio is unavailable.
+    }
+  };
+
+  const startOrResumeTimer = () => {
+    primeTimerAudio();
+    const seconds = countdown.status === 'paused' && countdown.remainingSeconds > 0
+      ? countdown.remainingSeconds
+      : countdown.durationSeconds;
+    setClockNow(Date.now());
+    setCountdown((current) => ({ ...current, remainingSeconds: seconds, endsAt: new Date(Date.now() + seconds * 1000).toISOString(), status: 'running' }));
+    setTimerOpen(true);
+  };
+
+  const pauseTimer = () => {
+    const seconds = countdownRemaining(countdown, Date.now());
+    setCountdown((current) => ({ ...current, remainingSeconds: seconds, endsAt: undefined, status: 'paused' }));
+  };
+
+  const resetTimer = () => {
+    setCountdown((current) => ({ ...current, remainingSeconds: current.durationSeconds, endsAt: undefined, status: 'idle' }));
+    setClockNow(Date.now());
+  };
+
+  const setTimerDuration = (seconds: number) => {
+    if (countdown.status === 'running') return;
+    const durationSeconds = Math.max(1, Math.min(359999, Math.round(seconds)));
+    setCountdown((current) => ({ ...current, durationSeconds, remainingSeconds: durationSeconds, endsAt: undefined, status: 'idle' }));
+  };
+
+  const bindTimerPlan = (planId: string) => {
+    if (countdown.status === 'running') return;
+    const plan = plans.find((item) => item.id === planId);
+    if (!plan) {
+      setCountdown((current) => ({ ...current, planId: undefined, label: '专注计时', remainingSeconds: current.durationSeconds, status: 'idle', endsAt: undefined }));
+      return;
+    }
+    const durationSeconds = planDurationSeconds(plan);
+    setCountdown({ planId: plan.id, label: plan.title, durationSeconds, remainingSeconds: durationSeconds, status: 'idle' });
+  };
+
+  const startPlanTimer = (plan: Plan) => {
+    primeTimerAudio();
+    const durationSeconds = planDurationSeconds(plan);
+    setClockNow(Date.now());
+    setCountdown({ planId: plan.id, label: plan.title, durationSeconds, remainingSeconds: durationSeconds, endsAt: new Date(Date.now() + durationSeconds * 1000).toISOString(), status: 'running' });
+    setTimerOpen(true);
+    setTimerExpanded(false);
+    setPlanModalOpen(false);
+    setToast(`已开始 · ${plan.title}`);
+  };
+
+  const completeTimerPlan = () => {
+    if (!countdown.planId) return;
+    setPlans((current) => current.map((plan) => plan.id === countdown.planId ? { ...plan, completed: true } : plan));
+    setToast(`${countdown.label} · 已标记完成`);
   };
 
   const openPoolCreate = () => {
@@ -552,6 +721,7 @@ export default function Home() {
     if (!editingId) return;
     const target = plans.find((plan) => plan.id === editingId);
     setPlans((current) => current.filter((plan) => plan.id !== editingId));
+    setCountdown((current) => current.planId === editingId ? { ...current, planId: undefined } : current);
     if (target?.poolId) setPoolItems((current) => current.map((item) => item.id === target.poolId ? { ...item, scheduled: false } : item));
     setPlanModalOpen(false);
     setToast('计划已删除');
@@ -858,6 +1028,16 @@ export default function Home() {
             </p>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => setTimerOpen((open) => !open)}
+              aria-pressed={timerOpen}
+              aria-label="打开倒计时器"
+              title="计划倒计时"
+              className={`timer-toggle-button ${countdown.status === 'running' ? 'is-running' : ''}`}
+            >
+              <TimerIcon className="size-4" />
+              <span className="hidden lg:inline">{countdown.status === 'running' || countdown.status === 'paused' ? formatCountdown(remainingTime) : '计时器'}</span>
+            </button>
             <button onClick={() => setCategoryModalOpen(true)} aria-label="管理分类" title="分类管理" className="icon-button shrink-0">
               <Settings2 className="size-4" />
             </button>
@@ -986,6 +1166,24 @@ export default function Home() {
         />
       )}
 
+      {timerOpen && (
+        <CountdownWidget
+          timer={countdown}
+          remaining={remainingTime}
+          plans={activePlans}
+          expanded={timerExpanded}
+          offsetForPool={section === 'calendar' && poolOpen}
+          onClose={() => { setTimerOpen(false); setTimerExpanded(false); }}
+          onToggleExpanded={() => setTimerExpanded((expanded) => !expanded)}
+          onBindPlan={bindTimerPlan}
+          onDurationChange={setTimerDuration}
+          onStart={startOrResumeTimer}
+          onPause={pauseTimer}
+          onReset={resetTimer}
+          onCompletePlan={completeTimerPlan}
+        />
+      )}
+
       {planModalOpen && (
         <PlanModal
           draft={draft}
@@ -993,10 +1191,12 @@ export default function Home() {
           categories={categories}
           editing={Boolean(editingId)}
           completed={editingId ? Boolean(plans.find((plan) => plan.id === editingId)?.completed) : false}
+          plan={editingId ? plans.find((plan) => plan.id === editingId) : undefined}
           onSubmit={savePlan}
           onClose={() => setPlanModalOpen(false)}
           onDelete={deleteEditingPlan}
           onToggleCompleted={() => editingId && toggleCompleted(editingId)}
+          onStartTimer={startPlanTimer}
         />
       )}
 
@@ -1603,7 +1803,109 @@ function PlanList({ plans, categoryMeta, emptyText, onEdit, onToggle }: { plans:
   );
 }
 
-function PlanModal({ draft, setDraft, categories, editing, completed, onSubmit, onClose, onDelete, onToggleCompleted }: { draft: PlanDraft; setDraft: (draft: PlanDraft) => void; categories: CategoryDefinition[]; editing: boolean; completed: boolean; onSubmit: (event: FormEvent) => void; onClose: () => void; onDelete: () => void; onToggleCompleted: () => void }) {
+function CountdownWidget({ timer, remaining, plans, expanded, offsetForPool, onClose, onToggleExpanded, onBindPlan, onDurationChange, onStart, onPause, onReset, onCompletePlan }: {
+  timer: CountdownTimer;
+  remaining: number;
+  plans: Plan[];
+  expanded: boolean;
+  offsetForPool: boolean;
+  onClose: () => void;
+  onToggleExpanded: () => void;
+  onBindPlan: (planId: string) => void;
+  onDurationChange: (seconds: number) => void;
+  onStart: () => void;
+  onPause: () => void;
+  onReset: () => void;
+  onCompletePlan: () => void;
+}) {
+  const circumference = 2 * Math.PI * 92;
+  const progress = timer.durationSeconds > 0 ? Math.max(0, Math.min(1, remaining / timer.durationSeconds)) : 0;
+  const finishAt = timer.endsAt ? new Date(timer.endsAt) : new Date(Date.now() + remaining * 1000);
+  const canEdit = timer.status !== 'running';
+  const boundPlanExists = Boolean(timer.planId && plans.some((plan) => plan.id === timer.planId));
+  const sortedPlans = [...plans].sort((a, b) => `${a.date}${a.startTime}`.localeCompare(`${b.date}${b.startTime}`));
+  const durationHours = Math.floor(timer.durationSeconds / 3600);
+  const durationMinutes = Math.floor((timer.durationSeconds % 3600) / 60);
+  const durationSeconds = timer.durationSeconds % 60;
+  const updateDurationPart = (part: 'hours' | 'minutes' | 'seconds', rawValue: number) => {
+    const value = Number.isFinite(rawValue) ? Math.max(0, Math.floor(rawValue)) : 0;
+    const nextHours = part === 'hours' ? Math.min(99, value) : durationHours;
+    const nextMinutes = part === 'minutes' ? Math.min(59, value) : durationMinutes;
+    const nextSeconds = part === 'seconds' ? Math.min(59, value) : durationSeconds;
+    onDurationChange(Math.max(1, nextHours * 3600 + nextMinutes * 60 + nextSeconds));
+  };
+
+  return (
+    <section
+      data-export-ignore="true"
+      role="dialog"
+      aria-label="计划倒计时器"
+      className={`countdown-widget ${expanded ? 'is-expanded' : ''} ${timer.status === 'finished' ? 'is-finished' : ''}`}
+      style={{ '--timer-right': offsetForPool ? '380px' : '20px' } as CSSProperties}
+    >
+      <header className="countdown-widget-header">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-semibold">{countdownDurationLabel(timer.durationSeconds)}</p>
+          <p className="mt-0.5 truncate text-[10px] text-white/55">{timer.label}</p>
+        </div>
+        <div className="flex gap-1">
+          <button onClick={onToggleExpanded} aria-label={expanded ? '缩小计时器' : '放大计时器'} className="countdown-header-button">{expanded ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}</button>
+          <button onClick={onClose} aria-label="收起计时器" className="countdown-header-button"><X className="size-4" /></button>
+        </div>
+      </header>
+
+      <label className="countdown-plan-select-label">
+        <span>绑定计划</span>
+        <select value={timer.planId || ''} disabled={!canEdit} onChange={(event) => onBindPlan(event.target.value)} className="countdown-plan-select">
+          <option value="">独立专注计时</option>
+          {sortedPlans.map((plan) => <option key={plan.id} value={plan.id}>{plan.date} {plan.startTime} · {plan.title}</option>)}
+        </select>
+      </label>
+
+      <div className="countdown-dial" aria-live="polite">
+        <svg viewBox="0 0 224 224" aria-hidden="true">
+          <circle className="countdown-track" cx="112" cy="112" r="92" />
+          <circle
+            className="countdown-progress"
+            cx="112"
+            cy="112"
+            r="92"
+            style={{ strokeDasharray: circumference, strokeDashoffset: circumference * (1 - progress) }}
+          />
+        </svg>
+        <div className="countdown-dial-content">
+          <strong>{formatCountdown(remaining)}</strong>
+          <span className="countdown-finish-time"><BellRing className="size-3" />{timer.status === 'finished' ? '时间到' : `结束于 ${pad(finishAt.getHours())}:${pad(finishAt.getMinutes())}`}</span>
+        </div>
+      </div>
+
+      <div className="countdown-controls">
+        <button onClick={timer.status === 'running' ? onPause : onStart} aria-label={timer.status === 'running' ? '暂停倒计时' : timer.status === 'paused' ? '继续倒计时' : '开始倒计时'} className="countdown-primary-control">
+          {timer.status === 'running' ? <Pause className="size-5 fill-current" /> : <Play className="ml-0.5 size-5 fill-current" />}
+        </button>
+        <button onClick={onReset} aria-label="重置倒计时" title="重置" className="countdown-secondary-control"><RotateCcw className="size-4" /></button>
+      </div>
+
+      {timer.status === 'finished' && boundPlanExists && <button onClick={onCompletePlan} className="countdown-complete-plan"><CheckCircle2 className="size-3.5" />标记计划完成</button>}
+
+      <div className="countdown-settings">
+        <div className="countdown-presets">
+          {TIMER_PRESETS.map((minutesValue) => (
+            <button key={minutesValue} disabled={!canEdit} onClick={() => onDurationChange(minutesValue * 60)} className={timer.durationSeconds === minutesValue * 60 ? 'is-selected' : ''}>{minutesValue} 分</button>
+          ))}
+        </div>
+        <div className="countdown-custom-duration">
+          <span>自定义</span>
+          <label><input aria-label="自定义小时" type="number" min={0} max={99} disabled={!canEdit} value={durationHours} onChange={(event) => updateDurationPart('hours', Number(event.target.value))} /><span>时</span></label>
+          <label><input aria-label="自定义分钟" type="number" min={0} max={59} disabled={!canEdit} value={durationMinutes} onChange={(event) => updateDurationPart('minutes', Number(event.target.value))} /><span>分</span></label>
+          <label><input aria-label="自定义秒" type="number" min={0} max={59} disabled={!canEdit} value={durationSeconds} onChange={(event) => updateDurationPart('seconds', Number(event.target.value))} /><span>秒</span></label>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function PlanModal({ draft, setDraft, categories, editing, completed, plan, onSubmit, onClose, onDelete, onToggleCompleted, onStartTimer }: { draft: PlanDraft; setDraft: (draft: PlanDraft) => void; categories: CategoryDefinition[]; editing: boolean; completed: boolean; plan?: Plan; onSubmit: (event: FormEvent) => void; onClose: () => void; onDelete: () => void; onToggleCompleted: () => void; onStartTimer: (plan: Plan) => void }) {
   return (
     <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <form onSubmit={onSubmit} className="modal-card max-w-[520px]">
@@ -1621,6 +1923,7 @@ function PlanModal({ draft, setDraft, categories, editing, completed, onSubmit, 
         <div className="flex flex-wrap items-center gap-2 border-t border-[#e7e7e7] px-5 py-4">
           {editing && <button type="button" onClick={onDelete} className="flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium text-red-600 hover:bg-red-50"><Trash2 className="size-3.5" />删除</button>}
           {editing && <button type="button" onClick={onToggleCompleted} className="rounded-lg border border-[#d8d8d8] px-3 py-2 text-xs font-medium hover:bg-[#f6f6f6]">{completed ? '恢复未完成' : '标记完成'}</button>}
+          {editing && plan && !completed && <button type="button" onClick={() => onStartTimer(plan)} className="flex items-center gap-1.5 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-medium text-sky-700 hover:bg-sky-100"><TimerIcon className="size-3.5" />开始倒计时</button>}
           <div className="ml-auto flex gap-2"><button type="button" onClick={onClose} className="rounded-lg border border-[#d8d8d8] px-4 py-2 text-xs font-medium hover:bg-[#f6f6f6]">取消</button><button className="rounded-lg bg-black px-4 py-2 text-xs font-medium text-white hover:bg-[#292929]">{editing ? '保存更改' : '添加计划'}</button></div>
         </div>
       </form>
