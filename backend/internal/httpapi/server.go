@@ -15,9 +15,13 @@ import (
 	"unicode/utf8"
 
 	"github.com/RolloTomassi37/kekaku/backend/internal/ai"
+	"github.com/RolloTomassi37/kekaku/backend/internal/calendarics"
 	"github.com/RolloTomassi37/kekaku/backend/internal/domain"
+	"github.com/RolloTomassi37/kekaku/backend/internal/mailer"
 	"github.com/RolloTomassi37/kekaku/backend/internal/store"
 )
+
+const calendarEmailAddress = "bluecat16384@163.com"
 
 type Server struct {
 	store         *store.Store
@@ -38,6 +42,7 @@ func New(dataStore *store.Store, aiClient *ai.Client, staticDir, allowedOrigin s
 	mux.HandleFunc("PUT /api/state", s.putState)
 	mux.HandleFunc("POST /api/ai-plan", s.aiPlan)
 	mux.HandleFunc("POST /api/ai-schedule", s.aiSchedule)
+	mux.HandleFunc("POST /api/calendar/email", s.emailCalendar)
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) { writeError(w, http.StatusNotFound, "接口不存在") })
 	mux.Handle("/", spaHandler(staticDir))
 	return s.recover(s.cors(s.logRequests(mux)))
@@ -62,6 +67,64 @@ func (s *Server) putState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) emailCalendar(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		SMTPPassword string `json:"smtpPassword"`
+		Confirmed    bool   `json:"confirmed"`
+	}
+	if err := decodeJSON(w, r, &request, 4<<10); err != nil {
+		writeError(w, http.StatusBadRequest, "请求格式无效")
+		return
+	}
+	request.SMTPPassword = strings.TrimSpace(request.SMTPPassword)
+	if !request.Confirmed {
+		writeError(w, http.StatusBadRequest, "请先确认发送日历邮件")
+		return
+	}
+	if len(request.SMTPPassword) < 6 || len(request.SMTPPassword) > 128 {
+		writeError(w, http.StatusBadRequest, "请输入有效的 163 邮箱客户端授权码")
+		return
+	}
+	state := s.store.Get()
+	if len(state.Plans) == 0 {
+		writeError(w, http.StatusUnprocessableEntity, "日历里还没有可以发送的计划")
+		return
+	}
+	calendar, err := calendarics.Build(state.Plans, state.Categories, "Kekaku 全部计划", time.Now())
+	if err != nil {
+		s.logger.Warn("calendar ICS generation failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "iPhone 日历附件生成失败")
+		return
+	}
+	firstDate, lastDate := state.Plans[0].Date, state.Plans[0].Date
+	for _, plan := range state.Plans[1:] {
+		if plan.Date < firstDate {
+			firstDate = plan.Date
+		}
+		if plan.Date > lastDate {
+			lastDate = plan.Date
+		}
+	}
+	attachmentName := fmt.Sprintf("kekaku-all-%s-%s.ics", firstDate, lastDate)
+	err = mailer.SendCalendar(r.Context(), mailer.CalendarMessage{
+		Host:           "smtp.163.com",
+		Port:           465,
+		Sender:         calendarEmailAddress,
+		Recipient:      calendarEmailAddress,
+		Password:       request.SMTPPassword,
+		Subject:        fmt.Sprintf("Kekaku 日历计划（%d 项）", len(state.Plans)),
+		Body:           "附件是 Kekaku 生成的 iPhone 兼容日历文件。请在 iPhone 邮件 App 中打开 .ics 附件，然后选择添加全部事件到日历。",
+		AttachmentName: attachmentName,
+		Attachment:     calendar,
+	})
+	if err != nil {
+		s.logger.Warn("calendar email failed", "error", err, "recipient", calendarEmailAddress, "plans", len(state.Plans))
+		writeError(w, http.StatusBadGateway, "邮件发送失败，请检查 163 邮箱客户端授权码和 SMTP 服务状态")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"sent": true, "recipient": calendarEmailAddress, "plans": len(state.Plans), "attachment": attachmentName})
 }
 
 type categoryOption struct {

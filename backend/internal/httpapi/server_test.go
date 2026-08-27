@@ -120,3 +120,31 @@ func TestHealthReportsMissingDeepSeekKey(t *testing.T) {
 		t.Fatalf("body = %s", response.Body.String())
 	}
 }
+
+func TestCalendarEmailRequiresExplicitConfirmationAndAuthorizationCode(t *testing.T) {
+	dataStore, err := store.Open(filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = dataStore.Close() })
+	handler := New(dataStore, &ai.Client{}, t.TempDir(), "", nil)
+
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "not confirmed", body: `{"smtpPassword":"temporary-code","confirmed":false}`},
+		{name: "missing authorization code", body: `{"smtpPassword":"","confirmed":true}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "/api/calendar/email", bytes.NewBufferString(test.body))
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d body = %s", response.Code, response.Body.String())
+			}
+		})
+	}
+}

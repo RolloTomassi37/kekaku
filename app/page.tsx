@@ -1,7 +1,6 @@
 import {
   Calendar1,
   CalendarDays,
-  CalendarPlus,
   CalendarRange,
   Check,
   CheckCircle2,
@@ -15,8 +14,11 @@ import {
   LayoutGrid,
   ListTodo,
   LoaderCircle,
+  Mail,
   Moon,
+  Send,
   Settings2,
+  ShieldCheck,
   SlidersHorizontal,
   Sparkles,
   Sun,
@@ -226,72 +228,6 @@ function downloadFile(content: Blob | string, filename: string) {
   if (content instanceof Blob) window.setTimeout(() => URL.revokeObjectURL(href), 1000);
 }
 
-function escapeICalendarText(value: string) {
-  return value.replace(/\\/g, '\\\\').replace(/\r?\n/g, '\\n').replace(/;/g, '\\;').replace(/,/g, '\\,');
-}
-
-function foldICalendarLine(line: string) {
-  const encoder = new TextEncoder();
-  const lines: string[] = [];
-  let current = '';
-  for (const character of line) {
-    if (current && encoder.encode(current + character).length > 75) {
-      lines.push(current);
-      current = ` ${character}`;
-    } else {
-      current += character;
-    }
-  }
-  lines.push(current);
-  return lines.join('\r\n');
-}
-
-function calendarDate(dateValue: string, timeValue: string) {
-  const [year, month, day] = dateValue.split('-').map(Number);
-  const [hour, minute] = timeValue.split(':').map(Number);
-  return new Date(year, month - 1, day, hour, minute, 0, 0);
-}
-
-function formatICalendarUTC(value: Date) {
-  return value.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
-}
-
-function buildICalendar(plans: Plan[], categoryMeta: CategoryDisplayMap, name: string) {
-  const stamp = formatICalendarUTC(new Date());
-  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Shanghai';
-  const lines = [
-    'BEGIN:VCALENDAR',
-    'VERSION:2.0',
-    'PRODID:-//Kekaku//计划日历//ZH-CN',
-    'CALSCALE:GREGORIAN',
-    'METHOD:PUBLISH',
-    `X-WR-CALNAME:${escapeICalendarText(`Kekaku · ${name}`)}`,
-    `X-WR-TIMEZONE:${escapeICalendarText(timezone)}`,
-  ];
-  for (const plan of [...plans].sort((a, b) => `${a.date}${a.startTime}`.localeCompare(`${b.date}${b.startTime}`))) {
-    const start = calendarDate(plan.date, plan.startTime);
-    let end = calendarDate(plan.date, plan.endTime);
-    if (end <= start) end = new Date(start.getTime() + 30 * 60 * 1000);
-    const description = [plan.note, plan.completed ? '状态：已完成' : '状态：待完成'].filter(Boolean).join('\n');
-    const safeID = plan.id.replace(/[^a-zA-Z0-9_.-]/g, '-');
-    lines.push(
-      'BEGIN:VEVENT',
-      `UID:${safeID}@kekaku.local`,
-      `DTSTAMP:${stamp}`,
-      `DTSTART:${formatICalendarUTC(start)}`,
-      `DTEND:${formatICalendarUTC(end)}`,
-      `SUMMARY:${escapeICalendarText(plan.completed ? `【已完成】${plan.title}` : plan.title)}`,
-      `DESCRIPTION:${escapeICalendarText(description)}`,
-      `CATEGORIES:${escapeICalendarText(categoryDisplay(categoryMeta, plan.category).label)}`,
-      'STATUS:CONFIRMED',
-      'TRANSP:OPAQUE',
-      'END:VEVENT',
-    );
-  }
-  lines.push('END:VCALENDAR');
-  return `${lines.map(foldICalendarLine).join('\r\n')}\r\n`;
-}
-
 function minutes(value: string) {
   const [hour, minute] = value.split(':').map(Number);
   return hour * 60 + minute;
@@ -454,6 +390,9 @@ export default function Home() {
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const [toast, setToast] = useState('');
   const [exporting, setExporting] = useState<ExportKind | null>(null);
+  const [icsEmailOpen, setIcsEmailOpen] = useState(false);
+  const [smtpPassword, setSmtpPassword] = useState('');
+  const [icsEmailError, setIcsEmailError] = useState('');
   const plannerExportRef = useRef<HTMLDivElement>(null);
 
   /* Persisted application state is hydrated from the Go API after mount. */
@@ -853,22 +792,41 @@ export default function Home() {
     }
   };
 
-  const exportCurrentICS = () => {
+  const openICSEmail = () => {
     if (exporting) return;
     if (!plans.length) {
-      setToast('日历里还没有可以导出的计划');
+      setToast('日历里还没有可以发送的计划');
       return;
     }
+    setIcsEmailError('');
+    setIcsEmailOpen(true);
+  };
+
+  const closeICSEmail = () => {
+    if (exporting === 'ics') return;
+    setSmtpPassword('');
+    setIcsEmailError('');
+    setIcsEmailOpen(false);
+  };
+
+  const sendICSEmail = async (event: FormEvent) => {
+    event.preventDefault();
+    if (exporting || !smtpPassword.trim()) return;
     setExporting('ics');
+    setIcsEmailError('');
     try {
-      const sortedPlans = [...plans].sort((a, b) => `${a.date}${a.startTime}`.localeCompare(`${b.date}${b.startTime}`));
-      const firstDate = sortedPlans[0].date;
-      const lastDate = sortedPlans[sortedPlans.length - 1].date;
-      const content = buildICalendar(sortedPlans, categoryMeta, '全部计划');
-      downloadFile(new Blob([content], { type: 'text/calendar;charset=utf-8' }), `kekaku-all-${firstDate}-${lastDate}.ics`);
-      setToast(`已导出全部 ${sortedPlans.length} 条日历计划，可导入 iOS 日历`);
-    } catch {
-      setToast('iOS 日历文件导出失败');
+      const response = await fetch(`${API_BASE}/api/calendar/email`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ smtpPassword: smtpPassword.trim(), confirmed: true }),
+      });
+      const result = await response.json().catch(() => null) as { error?: string; plans?: number; recipient?: string } | null;
+      if (!response.ok) throw new Error(result?.error || '日历邮件发送失败');
+      setSmtpPassword('');
+      setIcsEmailOpen(false);
+      setToast(`已将 ${result?.plans || plans.length} 条计划发送到 ${result?.recipient || 'bluecat16384@163.com'}`);
+    } catch (error) {
+      setIcsEmailError(error instanceof Error ? error.message : '日历邮件发送失败');
     } finally {
       setExporting(null);
     }
@@ -933,7 +891,7 @@ export default function Home() {
                 onToday={() => setAnchorDate(startOfDay(new Date()))}
                 exporting={exporting}
                 onExportJPG={exportCurrentJPG}
-                onExportICS={exportCurrentICS}
+                onExportICS={openICSEmail}
               />
 
               <div ref={plannerExportRef} className="calendar-export-surface">
@@ -1056,6 +1014,18 @@ export default function Home() {
 
       {aiPreview && (
         <AiPreviewModal preview={aiPreview} categoryMeta={categoryMeta} onClose={() => setAiPreview(null)} onAdd={addAiPlans} />
+      )}
+
+      {icsEmailOpen && (
+        <IcsEmailModal
+          plans={plans}
+          smtpPassword={smtpPassword}
+          setSmtpPassword={setSmtpPassword}
+          error={icsEmailError}
+          sending={exporting === 'ics'}
+          onSubmit={sendICSEmail}
+          onClose={closeICSEmail}
+        />
       )}
 
       {categoryModalOpen && (
@@ -1391,9 +1361,9 @@ function PlannerToolbar({
             {exporting === 'jpg' ? <LoaderCircle className="size-3.5 animate-spin" /> : <ImageDown className="size-3.5" />}
             {exporting === 'jpg' ? '生成中' : '导出 JPG'}
           </button>
-          <button onClick={onExportICS} disabled={Boolean(exporting)} className="export-button" title="导出全部已排入日历的计划，可导入 iPhone 日历">
-            {exporting === 'ics' ? <LoaderCircle className="size-3.5 animate-spin" /> : <CalendarPlus className="size-3.5" />}
-            {exporting === 'ics' ? '生成中' : '全部 ICS'}
+          <button onClick={onExportICS} disabled={Boolean(exporting)} className="export-button" title="把全部日历计划作为 iPhone 兼容 ICS 附件发送到邮箱">
+            {exporting === 'ics' ? <LoaderCircle className="size-3.5 animate-spin" /> : <Mail className="size-3.5" />}
+            {exporting === 'ics' ? '发送中' : '邮件 ICS'}
           </button>
         </div>
       </div>
@@ -1722,6 +1692,53 @@ function CategoryManagerModal({ categories, onClose, onSave }: { categories: Cat
         </div>
         <div className="flex justify-end gap-2 border-t border-[#e7e7e7] px-5 py-4"><button onClick={onClose} className="rounded-lg border border-[#d8d8d8] px-4 py-2 text-xs font-medium">取消</button><button disabled={invalid} onClick={() => onSave(draft)} className="rounded-lg bg-black px-4 py-2 text-xs font-medium text-white disabled:cursor-not-allowed disabled:opacity-40">保存分类</button></div>
       </section>
+    </div>
+  );
+}
+
+function IcsEmailModal({ plans, smtpPassword, setSmtpPassword, error, sending, onSubmit, onClose }: { plans: Plan[]; smtpPassword: string; setSmtpPassword: (value: string) => void; error: string; sending: boolean; onSubmit: (event: FormEvent) => void; onClose: () => void }) {
+  const sorted = [...plans].sort((a, b) => `${a.date}${a.startTime}`.localeCompare(`${b.date}${b.startTime}`));
+  return (
+    <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <form onSubmit={onSubmit} className="modal-card max-w-[620px]">
+        <div className="flex items-start justify-between border-b border-[#e7e7e7] px-5 py-4">
+          <div className="flex gap-3"><div className="grid size-9 shrink-0 place-items-center rounded-lg bg-sky-100 text-sky-700"><Mail className="size-4" /></div><div><h2 className="text-base font-semibold">发送到 iPhone 日历</h2><p className="mt-1 text-xs leading-5 text-[#777]">生成兼容的 ICS 附件，并发送到 bluecat16384@163.com</p></div></div>
+          <button type="button" onClick={onClose} disabled={sending} className="icon-button border-0 disabled:opacity-40"><X className="size-4" /></button>
+        </div>
+        <div className="max-h-[62vh] space-y-4 overflow-y-auto p-5">
+          <div className="grid grid-cols-4 gap-2 text-center text-[10px] leading-4 text-[#666]">
+            {['生成 ICS', '邮件附件', 'iPhone 打开', '加入日历'].map((step, index) => (
+              <div key={step} className="relative rounded-lg border border-[#e2e2e2] bg-[#fafafa] px-2 py-2.5"><span className="mx-auto mb-1 grid size-5 place-items-center rounded-full bg-black text-[9px] text-white">{index + 1}</span>{step}{index < 3 && <span className="absolute -right-2 top-1/2 z-10 -translate-y-1/2 bg-white px-0.5 text-[#aaa]">→</span>}</div>
+            ))}
+          </div>
+          <div className="rounded-xl border border-[#dedede] bg-[#fafafa] p-3">
+            <div className="flex items-center justify-between"><p className="text-xs font-semibold">附件事件摘要</p><span className="rounded-full bg-white px-2 py-1 text-[9px] text-[#666]">共 {sorted.length} 项</span></div>
+            <div className="mt-2 space-y-1.5">
+              {sorted.slice(0, 5).map((plan) => <div key={plan.id} className="flex items-center gap-2 text-[10px]"><span className="w-[92px] shrink-0 tabular-nums text-[#777]">{plan.date} {plan.startTime}</span><span className="truncate font-medium">{plan.title}</span></div>)}
+              {sorted.length > 5 && <p className="pt-1 text-[10px] text-[#888]">以及另外 {sorted.length - 5} 项计划</p>}
+            </div>
+          </div>
+          <label className="field-label">163 邮箱客户端授权码
+            <input
+              required
+              autoFocus
+              type="password"
+              autoComplete="off"
+              value={smtpPassword}
+              onChange={(event) => setSmtpPassword(event.target.value)}
+              className="field-input"
+              placeholder="不是邮箱登录密码"
+              aria-describedby="smtp-password-help"
+            />
+          </label>
+          <div id="smtp-password-help" className="flex items-start gap-2 rounded-lg bg-emerald-50 p-3 text-[10px] leading-5 text-emerald-800"><ShieldCheck className="mt-0.5 size-3.5 shrink-0" /><p>授权码只在本次发送时交给本机 Go 服务使用，不会保存到浏览器、SQLite、.env、日志或 Git。</p></div>
+          {error && <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-[11px] text-red-700">{error}</p>}
+        </div>
+        <div className="flex items-center justify-between gap-3 border-t border-[#e7e7e7] px-5 py-4">
+          <p className="text-[10px] leading-4 text-[#888]">点击确认后会立即发送真实邮件</p>
+          <div className="flex gap-2"><button type="button" onClick={onClose} disabled={sending} className="rounded-lg border border-[#d8d8d8] px-4 py-2 text-xs font-medium disabled:opacity-40">取消</button><button disabled={!smtpPassword.trim() || sending} className="flex items-center gap-1.5 rounded-lg bg-black px-4 py-2 text-xs font-medium text-white disabled:cursor-not-allowed disabled:opacity-40">{sending ? <LoaderCircle className="size-3.5 animate-spin" /> : <Send className="size-3.5" />}{sending ? '发送中' : '确认发送邮件'}</button></div>
+        </div>
+      </form>
     </div>
   );
 }
