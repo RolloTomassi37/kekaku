@@ -69,6 +69,12 @@ go build -o ./kekaku ./backend/cmd/server
 ./kekaku
 ```
 
+### Windows 一键启动 EXE
+
+在项目根目录双击 `build-windows.cmd`，脚本会构建 React、运行 Go 测试并生成 `Kekaku.exe`。以后直接双击根目录中的 `Kekaku.exe`，程序会使用 8082 端口启动服务并自动打开浏览器。
+
+`Kekaku.exe` 必须与 `dist`、`data` 和 `.env.local` 保持在同一个项目根目录中。关闭 EXE 的控制台窗口即会停止本地服务。
+
 Go 服务默认监听 `:8080`，并从 `./dist` 提供前端文件。
 
 首次启动会创建 `./data/kekaku.db`。如果目录中存在旧版
